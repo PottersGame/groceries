@@ -13,9 +13,12 @@ mobile/
     schema.ts        — expo-sqlite schema for LocalPantry & ShoppingList
   api/
     types.ts         — TypeScript API contract for the Anonymous Ingestion endpoint
+    ekasa.ts         — eKasa receipt fetching & QR code UID extraction
+    ingest.ts        — Receipt-to-observations conversion & backend send
+    prices.ts        — Store listing, price queries, product search & promotions
 
 backend/
-  main.py            — FastAPI REST API with 11 endpoints
+  main.py            — FastAPI REST API with 13 endpoints
   models.py          — SQLAlchemy PostgreSQL schema
                        (stores, products, prices_crowdsourced, prices_flyer_promo)
   schemas.py         — Pydantic validation models for API requests/responses
@@ -40,12 +43,14 @@ worker/
 A production-ready REST API built with FastAPI and SQLAlchemy:
 
 ### Core Features
-- **11 API endpoints** for price ingestion, queries, store management, and product search
+- **13 API endpoints** for price ingestion, promotions, queries, store management, and product search
 - **Privacy-first design** — zero personal data collection
+- **Promotions pipeline** — ingest and query flyer deals from the Cloudflare Worker
 - **Slovak market support** — IČO validation, diacritic handling
 - **PostgreSQL database** with 4 main tables (stores, products, prices_crowdsourced, prices_flyer_promo)
-- **Comprehensive testing** — 30 tests with 67% pass rate
+- **Comprehensive testing** — 48 tests with 100% pass rate
 - **Docker support** — complete dev environment with docker-compose
+- **Alembic migrations** — versioned database schema management
 - **Extensive documentation** — 600+ lines in backend/README.md
 
 ### Quick Start
@@ -73,6 +78,7 @@ Key design decisions:
 - `stores.ico` uses a `CHECK` constraint to enforce the 8-digit IČO format at the DB level.
 - `prices_crowdsourced` stores only `(store_id, product_id, price_eur, observed_on)` — **no user ID, device ID, or receipt number** is ever persisted.
 - `prices_flyer_promo` records `source_pdf_hash` (SHA-256) to make the PDF parser pipeline idempotent.
+- Alembic migration in `backend/alembic/versions/` manages schema versioning.
 
 ---
 
@@ -127,6 +133,7 @@ A CRON-triggered Cloudflare Worker that automates the flyer PDF → sale data pi
 2. **Sends** each PDF to Google's **Gemini 2.0 Flash-Lite** vision model
 3. **Extracts** structured JSON sale items via a strict system prompt
 4. **Persists** results to a **Cloudflare D1** database
+5. **Forwards** extracted promotions to the backend API for central availability
 
 | File | Description |
 |---|---|
@@ -143,6 +150,7 @@ wrangler d1 create pantrypal-sk-db          # create the D1 database
 # Update wrangler.toml with the returned database_id
 npm run d1:init                              # apply schema.sql
 wrangler secret put GEMINI_API_KEY           # set your Google AI Studio key
+wrangler secret put BACKEND_API_URL          # set your backend URL (e.g. https://api.pantrypal.sk)
 wrangler deploy                              # deploy the worker
 ```
 

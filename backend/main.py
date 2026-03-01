@@ -4,7 +4,8 @@ PantryPal SK — FastAPI Backend Application
 Main application entry point with all API endpoints.
 """
 
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import engine, get_db
-from .models import PriceCrowdsourced, Product, Store
+from .models import PriceCrowdsourced, PriceFlyerPromo, Product, Store
 from .schemas import (
     HealthCheckResponse,
     IngestionErrorResponse,
@@ -24,8 +25,29 @@ from .schemas import (
     PriceEntry,
     PriceQueryParams,
     PriceQueryResponse,
+    PromoEntry,
+    PromotionsIngestionPayload,
+    PromotionsIngestionResponse,
+    PromotionsQueryResponse,
 )
 from .utils import normalize_product_name, lookup_chain_name
+
+# ---------------------------------------------------------------------------
+# Application Lifecycle
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Application lifespan handler for startup and shutdown."""
+    print(f"🚀 Starting {settings.app_name} v{settings.app_version}")
+    print(f"📍 API prefix: {settings.api_prefix}")
+    print(f"🔍 Debug mode: {settings.debug}")
+    print(f"🌐 CORS origins: {settings.cors_origins}")
+    yield
+    print(f"👋 Shutting down {settings.app_name}")
+    engine.dispose()
+
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -34,6 +56,7 @@ app = FastAPI(
     description="Backend API for PantryPal SK — grocery price tracking and comparison",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # Configure CORS
@@ -414,6 +437,190 @@ def search_products(
 
 
 # ---------------------------------------------------------------------------
+# Promotions Endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    f"{settings.api_prefix}/promotions/ingest",
+    response_model=PromotionsIngestionResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Promotions"],
+)
+def ingest_promotions(
+    payload: PromotionsIngestionPayload,
+    db: Session = Depends(get_db),
+) -> PromotionsIngestionResponse:
+    """
+    Ingest promotional prices extracted from supermarket flyers.
+
+    Called by the Cloudflare Worker after Gemini AI extraction.
+    Uses source_pdf_hash for idempotent re-runs.
+    """
+    accepted = 0
+    rejected = 0
+    errors: dict[int, str] = {}
+
+    for idx, item in enumerate(payload.items):
+        try:
+            # 1. Get or create the store
+            store = db.query(Store).filter(Store.ico == item.ico).first()
+            if not store:
+                store = Store(
+                    ico=item.ico,
+                    chain_name=lookup_chain_name(item.ico),
+                    flyer_enabled=True,
+                )
+                db.add(store)
+                db.flush()
+
+            # 2. Normalize the product name
+            normalized = normalize_product_name(item.productName)
+
+            # 3. Get or create the product
+            product = (
+                db.query(Product).filter(Product.normalized_name == normalized).first()
+            )
+            if not product:
+                product = Product(
+                    normalized_name=normalized,
+                    display_name=item.productName,
+                    category=item.category,
+                )
+                db.add(product)
+                db.flush()
+
+            # 4. Default valid_to to valid_from + 7 days if not provided
+            valid_to = item.validTo or (item.validFrom + timedelta(days=7))
+
+            # 5. Upsert the promo record (idempotent via unique constraint)
+            existing = (
+                db.query(PriceFlyerPromo)
+                .filter(
+                    PriceFlyerPromo.store_id == store.id,
+                    PriceFlyerPromo.product_id == product.id,
+                    PriceFlyerPromo.valid_from == item.validFrom,
+                )
+                .first()
+            )
+
+            if existing:
+                existing.promo_price_eur = item.salePrice
+                existing.regular_price_eur = item.originalPrice
+                existing.valid_to = valid_to
+                existing.source_pdf_hash = item.sourcePdfHash
+            else:
+                promo_record = PriceFlyerPromo(
+                    store_id=store.id,
+                    product_id=product.id,
+                    promo_price_eur=item.salePrice,
+                    regular_price_eur=item.originalPrice,
+                    valid_from=item.validFrom,
+                    valid_to=valid_to,
+                    source_pdf_hash=item.sourcePdfHash,
+                )
+                db.add(promo_record)
+
+            accepted += 1
+
+        except ValueError as e:
+            errors[idx] = str(e)
+            rejected += 1
+        except SQLAlchemyError as e:
+            errors[idx] = f"Database error: {str(e)}"
+            rejected += 1
+            db.rollback()
+        except Exception as e:
+            errors[idx] = f"Unexpected error: {str(e)}"
+            rejected += 1
+            db.rollback()
+
+    if accepted > 0:
+        try:
+            db.commit()
+        except SQLAlchemyError as e:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to commit transactions: {str(e)}",
+            )
+
+    return PromotionsIngestionResponse(
+        status="ok",
+        accepted=accepted,
+        rejected=rejected,
+        errors=errors if errors else None,
+    )
+
+
+@app.get(
+    f"{settings.api_prefix}/promotions",
+    response_model=PromotionsQueryResponse,
+    tags=["Promotions"],
+)
+def query_promotions(
+    product_name: str | None = None,
+    ico: str | None = None,
+    active_only: bool = True,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+) -> PromotionsQueryResponse:
+    """
+    Query promotional prices from supermarket flyers.
+
+    By default returns only currently active promotions.
+    """
+    query = (
+        db.query(
+            PriceFlyerPromo,
+            Product.display_name,
+            Store.ico,
+            Store.chain_name,
+            Product.category,
+        )
+        .join(Product, PriceFlyerPromo.product_id == Product.id)
+        .join(Store, PriceFlyerPromo.store_id == Store.id)
+    )
+
+    if product_name:
+        normalized = normalize_product_name(product_name)
+        query = query.filter(Product.normalized_name.contains(normalized))
+
+    if ico:
+        query = query.filter(Store.ico == ico)
+
+    if active_only:
+        today = datetime.now().date()
+        query = query.filter(
+            PriceFlyerPromo.valid_from <= today,
+            PriceFlyerPromo.valid_to >= today,
+        )
+
+    query = query.order_by(PriceFlyerPromo.valid_from.desc()).limit(limit)
+    results = query.all()
+
+    promo_entries = [
+        PromoEntry(
+            product_name=display_name,
+            store_ico=store_ico,
+            store_chain=chain_name,
+            promo_price_eur=promo.promo_price_eur,
+            regular_price_eur=promo.regular_price_eur,
+            valid_from=promo.valid_from,
+            valid_to=promo.valid_to,
+            category=category,
+        )
+        for promo, display_name, store_ico, chain_name, category in results
+    ]
+
+    return PromotionsQueryResponse(
+        status="ok",
+        count=len(promo_entries),
+        results=promo_entries,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Statistics Endpoint
 # ---------------------------------------------------------------------------
 
@@ -432,6 +639,7 @@ def get_statistics(db: Session = Depends(get_db)) -> dict[str, Any]:
         store_count = db.query(func.count(Store.id)).scalar()
         product_count = db.query(func.count(Product.id)).scalar()
         price_count = db.query(func.count(PriceCrowdsourced.id)).scalar()
+        promo_count = db.query(func.count(PriceFlyerPromo.id)).scalar()
 
         return {
             "status": "ok",
@@ -439,6 +647,7 @@ def get_statistics(db: Session = Depends(get_db)) -> dict[str, Any]:
                 "stores": store_count,
                 "products": product_count,
                 "price_observations": price_count,
+                "active_promotions": promo_count,
             },
         }
     except SQLAlchemyError as e:
@@ -448,22 +657,3 @@ def get_statistics(db: Session = Depends(get_db)) -> dict[str, Any]:
         )
 
 
-# ---------------------------------------------------------------------------
-# Application Lifecycle
-# ---------------------------------------------------------------------------
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the application on startup."""
-    print(f"🚀 Starting {settings.app_name} v{settings.app_version}")
-    print(f"📍 API prefix: {settings.api_prefix}")
-    print(f"🔍 Debug mode: {settings.debug}")
-    print(f"🌐 CORS origins: {settings.cors_origins}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up resources on shutdown."""
-    print(f"👋 Shutting down {settings.app_name}")
-    engine.dispose()

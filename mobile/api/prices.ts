@@ -107,3 +107,46 @@ export async function searchProducts(
   const json = (await response.json()) as { products: ProductSearchResult[] };
   return json.products;
 }
+
+// ---------------------------------------------------------------------------
+// Promotions (flyer deals)
+// ---------------------------------------------------------------------------
+
+export interface PromoResult {
+  product_name: string;
+  store_ico: string;
+  store_chain: string;
+  promo_price_eur: number;
+  regular_price_eur: number | null;
+  valid_from: string;
+  valid_to: string;
+  category: string | null;
+}
+
+export async function fetchPromotions(
+  params?: {
+    productName?: string;
+    ico?: string;
+    activeOnly?: boolean;
+    limit?: number;
+  },
+  options?: { signal?: AbortSignal; fetchImpl?: typeof fetch }
+): Promise<PromoResult[]> {
+  const fetchImpl = options?.fetchImpl ?? fetch;
+  const url = new URL(`${BACKEND_BASE_URL}/api/v1/promotions`);
+
+  if (params?.productName) url.searchParams.set("product_name", params.productName);
+  if (params?.ico) url.searchParams.set("ico", params.ico);
+  if (params?.activeOnly === false) url.searchParams.set("active_only", "false");
+  if (params?.limit) url.searchParams.set("limit", String(params.limit));
+
+  const response = await fetchImpl(url.toString(), {
+    headers: { Accept: "application/json" },
+    signal: options?.signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch promotions: ${response.status}`);
+  }
+  const json = (await response.json()) as { results: PromoResult[] };
+  return json.results;
+}
