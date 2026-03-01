@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "PantryPal SK",
+    "slug": "pantrypal-sk",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "pantrypal",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "backgroundColor": "#05060A",
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Polohu používame na nájdenie najbližších obchodov."
+        }
+      ],
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "Kameru používame na skenovanie eKasa QR kódov."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
