@@ -5,7 +5,7 @@ Main application entry point with all API endpoints.
 """
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -491,9 +491,7 @@ def ingest_promotions(
                 db.flush()
 
             # 4. Default valid_to to valid_from + 7 days if not provided
-            valid_to = item.validTo or (
-                item.validFrom + __import__("datetime").timedelta(days=7)
-            )
+            valid_to = item.validTo or (item.validFrom + timedelta(days=7))
 
             # 5. Upsert the promo record (idempotent via unique constraint)
             existing = (

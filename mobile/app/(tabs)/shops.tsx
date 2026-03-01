@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   FlatList,
   SafeAreaView,
-  SectionList,
   StyleSheet,
   Text,
   TextInput,
@@ -104,12 +103,12 @@ export default function ShopsTab(): React.JSX.Element {
           <Text style={styles.promoSalePrice}>
             {item.promo_price_eur.toFixed(2)} €
           </Text>
-          {item.regular_price_eur && (
+          {item.regular_price_eur != null && item.regular_price_eur > 0 && (
             <Text style={styles.promoOriginalPrice}>
               {item.regular_price_eur.toFixed(2)} €
             </Text>
           )}
-          {item.regular_price_eur && (
+          {item.regular_price_eur != null && item.regular_price_eur > 0 && (
             <Text style={styles.promoDiscount}>
               -{Math.round((1 - item.promo_price_eur / item.regular_price_eur) * 100)}%
             </Text>
@@ -224,7 +223,9 @@ export default function ShopsTab(): React.JSX.Element {
           ) : (
             <FlatList
               data={promos}
-              keyExtractor={(_, i) => `promo-${i}`}
+              keyExtractor={(item, i) =>
+                `${item.store_ico}-${item.product_name}-${item.valid_from}`
+              }
               renderItem={renderPromo}
               contentContainerStyle={styles.listContent}
               ListHeaderComponent={
