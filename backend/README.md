@@ -115,7 +115,8 @@ Get database statistics.
   "statistics": {
     "stores": 42,
     "products": 1523,
-    "price_observations": 8945
+    "price_observations": 8945,
+    "active_promotions": 128
   }
 }
 ```
