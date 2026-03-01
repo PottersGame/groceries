@@ -20,6 +20,7 @@ import {
   useCodeScanner,
 } from "react-native-vision-camera";
 import { extractUidFromQr, fetchEKasaReceipt, type EKasaReceipt } from "./api/ekasa";
+import { useIngest } from "./hooks/useIngest";
 
 export default function ReceiptScannerScreen(): React.JSX.Element {
   const device = useCameraDevice("back");
@@ -27,6 +28,7 @@ export default function ReceiptScannerScreen(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(false);
   const [receipt, setReceipt] = useState<EKasaReceipt | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { ingest, result: ingestResult, error: ingestError } = useIngest();
 
   const isProcessingRef = useRef(false);
   const lastUidRef = useRef<string | null>(null);
@@ -75,6 +77,7 @@ export default function ReceiptScannerScreen(): React.JSX.Element {
     try {
       const nextReceipt = await fetchEKasaReceipt(uid);
       setReceipt(nextReceipt);
+      void ingest(nextReceipt);
     } catch (scanError) {
       console.warn(`Failed to fetch receipt for UID: ${uid}`, scanError);
       setError("Nepodarilo sa načítať eKasa doklad.");
@@ -82,7 +85,7 @@ export default function ReceiptScannerScreen(): React.JSX.Element {
       setIsLoading(false);
       isProcessingRef.current = false;
     }
-  }, []);
+  }, [ingest]);
 
   const codeScanner = useCodeScanner({
     codeTypes: ["qr"],
@@ -152,6 +155,12 @@ export default function ReceiptScannerScreen(): React.JSX.Element {
 
       <View style={styles.statusContainer}>
         <Text style={styles.statusText}>{statusText}</Text>
+        {ingestResult != null ? (
+          <Text style={styles.ingestSuccess}>✓ Odoslané: {ingestResult.accepted} cien</Text>
+        ) : null}
+        {ingestError != null ? (
+          <Text style={styles.ingestError}>{ingestError}</Text>
+        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -202,5 +211,15 @@ const styles = StyleSheet.create({
   statusText: {
     color: "#E5E7EB",
     fontSize: 14,
+  },
+  ingestSuccess: {
+    color: "#4ADE80",
+    fontSize: 12,
+    marginTop: 4,
+  },
+  ingestError: {
+    color: "#F87171",
+    fontSize: 12,
+    marginTop: 4,
   },
 });
