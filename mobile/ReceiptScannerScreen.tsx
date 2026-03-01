@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   SafeAreaView,
   StyleSheet,
   Text,
@@ -21,6 +22,7 @@ import {
 } from "react-native-vision-camera";
 import { extractUidFromQr, fetchEKasaReceipt, type EKasaReceipt } from "./api/ekasa";
 import { useIngest } from "./hooks/useIngest";
+import { usePantry } from "./db/usePantry";
 
 export default function ReceiptScannerScreen(): React.JSX.Element {
   const device = useCameraDevice("back");
@@ -29,6 +31,7 @@ export default function ReceiptScannerScreen(): React.JSX.Element {
   const [receipt, setReceipt] = useState<EKasaReceipt | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { ingest, result: ingestResult, error: ingestError } = useIngest();
+  const { addReceiptItemsToPantry } = usePantry();
 
   const isProcessingRef = useRef(false);
   const lastUidRef = useRef<string | null>(null);
@@ -78,6 +81,15 @@ export default function ReceiptScannerScreen(): React.JSX.Element {
       const nextReceipt = await fetchEKasaReceipt(uid);
       setReceipt(nextReceipt);
       void ingest(nextReceipt);
+      const saved = await addReceiptItemsToPantry(
+        nextReceipt.items,
+        nextReceipt.ico,
+        nextReceipt.issuedAt
+      );
+      Alert.alert(
+        "Spajza aktualizovaná",
+        `${saved} položiek bolo uložených do spajze.`
+      );
     } catch (scanError) {
       console.warn(`Failed to fetch receipt for UID: ${uid}`, scanError);
       setError("Nepodarilo sa načítať eKasa doklad.");
@@ -85,7 +97,7 @@ export default function ReceiptScannerScreen(): React.JSX.Element {
       setIsLoading(false);
       isProcessingRef.current = false;
     }
-  }, [ingest]);
+  }, [ingest, addReceiptItemsToPantry]);
 
   const codeScanner = useCodeScanner({
     codeTypes: ["qr"],
