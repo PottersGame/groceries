@@ -5,3 +5,11 @@ backend/__pycache__/
 worker/node_modules/
 worker/dist/
 worker/.wrangler/
+
+# Mobile (Expo)
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/android/
+mobile/ios/
+mobile/.env.local
