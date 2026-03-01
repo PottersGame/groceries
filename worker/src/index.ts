@@ -2,9 +2,10 @@
  * PantryPal SK — Cloudflare Worker: Flyer PDF Ingestion
  *
  * CRON-triggered worker that:
- *   1. Fetches supermarket flyer PDFs
- *   2. Sends the PDF to the Gemini API for structured data extraction
- *   3. Persists the extracted sale items to a Cloudflare D1 database
+ *   1. Dynamically discovers the latest flyer PDF URL for each store
+ *   2. Fetches the PDF with retry logic and exponential backoff
+ *   3. Sends the PDF to the Gemini API for structured data extraction
+ *   4. Upserts the extracted sale items into a Cloudflare D1 database
  */
 
 // ---------------------------------------------------------------------------
@@ -16,10 +17,6 @@ export interface Env {
   DB: D1Database;
   /** Google AI Studio API key (set via `wrangler secret put GEMINI_API_KEY`) */
   GEMINI_API_KEY: string;
-  /** Comma-separated list of flyer PDF URLs to process */
-  FLYER_PDF_URLS?: string;
-  /** Name of the store whose flyers are being processed */
-  STORE_NAME?: string;
 }
 
 /** A single sale item extracted from a flyer by the Gemini model. */
@@ -28,6 +25,8 @@ export interface SaleItem {
   sale_price: number;
   original_price: number | null;
   category: string;
+  start_date: string;
+  end_date: string | null;
 }
 
 /** Shape of the Gemini API response content part. */
@@ -43,12 +42,114 @@ interface GeminiApiResponse {
   }>;
 }
 
+/** Store target descriptor used by the ingestion pipeline. */
+interface StoreTarget {
+  name: "lidl" | "kaufland";
+  ico: string;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const GEMINI_MODEL = "gemini-2.5-flash";
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+const DESKTOP_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+const STORE_TARGETS: StoreTarget[] = [
+  { name: "lidl", ico: "31636365" },
+  { name: "kaufland", ico: "31322832" },
+];
+
+// ---------------------------------------------------------------------------
+// Fetch Utility with Retry
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetches a URL with exponential-backoff retry logic.
+ *
+ * Retries are skipped for 404 responses. A desktop User-Agent header is sent
+ * on every request to avoid basic bot-detection blocks.
+ *
+ * @param url     - URL to fetch.
+ * @param retries - Maximum number of attempts (default 3).
+ * @returns The final {@link Response}.
+ */
+export async function fetchWithRetry(
+  url: string,
+  retries = 3,
+): Promise<Response> {
+  let lastResponse: Response | null = null;
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const response = await fetch(url, {
+      headers: { "User-Agent": DESKTOP_UA },
+    });
+
+    // Success or permanent "not found" — no point retrying.
+    if (response.ok || response.status === 404) {
+      return response;
+    }
+
+    lastResponse = response;
+    console.warn(
+      `fetchWithRetry: attempt ${attempt + 1}/${retries} failed for ${url} (${response.status})`,
+    );
+
+    if (attempt < retries - 1) {
+      // Exponential backoff: 1 s, 2 s, 4 s, …
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, Math.pow(2, attempt) * 1000),
+      );
+    }
+  }
+
+  // All retries exhausted — return the last non-ok response.
+  return lastResponse!;
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic Flyer URL Discovery
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetches the store's flyer listing page and extracts the first PDF URL found.
+ *
+ * @param store - Either `"lidl"` or `"kaufland"`.
+ * @returns The PDF URL string, or `null` if none could be found.
+ */
+export async function getLatestFlyerUrl(
+  store: "lidl" | "kaufland",
+): Promise<string | null> {
+  const listingUrls: Record<"lidl" | "kaufland", string> = {
+    lidl: "https://www.lidl.sk/c/letaky/s10017541",
+    kaufland: "https://www.kaufland.sk/letaky.html",
+  };
+
+  try {
+    const response = await fetchWithRetry(listingUrls[store]);
+    if (!response.ok) {
+      console.error(
+        `getLatestFlyerUrl: failed to fetch ${store} listing page (${response.status})`,
+      );
+      return null;
+    }
+
+    const html = await response.text();
+    const match = html.match(/(https:\/\/[^"']+\.pdf)/i);
+    if (!match) {
+      console.warn(`getLatestFlyerUrl: no PDF URL found on ${store} listing page`);
+      return null;
+    }
+
+    return match[1];
+  } catch (err) {
+    console.error(`getLatestFlyerUrl: error fetching ${store} listing page:`, err);
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Gemini PDF Extraction
@@ -62,6 +163,7 @@ const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/
  *   - Exact field names and types
  *   - Product name normalisation rules (lower-case, no diacritics)
  *   - Category classification
+ *   - Promotion validity dates
  */
 const SYSTEM_PROMPT = `You are a data extraction assistant. Extract all grocery items on sale from this Slovak supermarket flyer. Return ONLY a valid JSON array. Do not use markdown blocks.
 
@@ -69,7 +171,9 @@ Each element must have exactly these fields:
 - "product_name": string (normalized, lowercase, no diacritics)
 - "sale_price": number
 - "original_price": a number, or null if the original non-discounted price is not shown or cannot be determined
-- "category": string (e.g., "dairy", "meat", "bakery", "pantry")`;
+- "category": string (e.g., "dairy", "meat", "bakery", "pantry")
+- "start_date": string (ISO 8601 date, e.g. "2024-01-15"; use today's date if not shown)
+- "end_date": string or null (ISO 8601 date, or null if not shown)`;
 
 /**
  * Sends a PDF buffer to the Gemini API and extracts structured sale data.
@@ -144,7 +248,10 @@ export async function extractPromotionsFromPdf(
       item.sale_price > 0 &&
       (item.original_price === null || typeof item.original_price === "number") &&
       typeof item.category === "string" &&
-      item.category.length > 0;
+      item.category.length > 0 &&
+      typeof item.start_date === "string" &&
+      item.start_date.length > 0 &&
+      (item.end_date === null || typeof item.end_date === "string");
 
     if (!valid) {
       console.warn("Skipping invalid sale item:", JSON.stringify(item));
@@ -154,35 +261,42 @@ export async function extractPromotionsFromPdf(
 }
 
 // ---------------------------------------------------------------------------
-// D1 Insertion
+// D1 Upsert
 // ---------------------------------------------------------------------------
 
 /**
- * Batch-inserts an array of sale items into the D1 `promotions` table.
+ * Batch-upserts an array of sale items into the D1 `promotions` table.
  *
- * Uses D1's `batch()` API to execute all inserts in a single round-trip.
+ * Uses SQLite's ON CONFLICT … DO UPDATE syntax so the operation is idempotent:
+ * re-running the pipeline for the same flyer updates prices/dates rather than
+ * creating duplicate rows.
  *
- * @param db    - Cloudflare D1 database binding.
- * @param store - Name of the store.
- * @param items - Array of validated sale items from Gemini.
- * @returns Number of rows inserted.
+ * @param db       - Cloudflare D1 database binding.
+ * @param storeIco - ICO (company registration number) of the store.
+ * @param items    - Array of validated sale items from Gemini.
+ * @returns Number of statements executed.
  */
 export async function insertPromotions(
   db: D1Database,
-  store: string,
+  storeIco: string,
   items: SaleItem[],
 ): Promise<number> {
   if (items.length === 0) return 0;
 
   const stmt = db.prepare(
-    `INSERT INTO promotions (store, product_name, sale_price, category)
-     VALUES (?, ?, ?, ?)`,
+    `INSERT INTO promotions (store_ico, product_name_normalized, start_date, end_date, sale_price, category)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(store_ico, product_name_normalized, start_date)
+     DO UPDATE SET sale_price = excluded.sale_price,
+                   end_date   = excluded.end_date`,
   );
 
   const batch = items.map((item) =>
     stmt.bind(
-      store,
+      storeIco,
       item.product_name,
+      item.start_date,
+      item.end_date,
       item.sale_price,
       item.category,
     ),
@@ -193,31 +307,15 @@ export async function insertPromotions(
 }
 
 // ---------------------------------------------------------------------------
-// PDF Fetching Utility
-// ---------------------------------------------------------------------------
-
-/**
- * Downloads a supermarket flyer PDF from the given URL.
- *
- * @param url - URL of the flyer PDF.
- * @returns The raw PDF bytes as an ArrayBuffer.
- */
-export async function fetchSupermarketPdf(
-  url: string,
-): Promise<ArrayBuffer> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch PDF from ${url}: ${response.status}`);
-  }
-  return response.arrayBuffer();
-}
-
-// ---------------------------------------------------------------------------
 // Ingestion Pipeline
 // ---------------------------------------------------------------------------
 
 /**
  * Core ingestion logic shared by the CRON handler and the manual HTTP trigger.
+ *
+ * Loops through the hard-coded store targets, dynamically discovers the latest
+ * flyer PDF URL for each, fetches the PDF with retry logic, extracts sale items
+ * via Gemini, and upserts the results into D1.
  *
  * @param env - Worker environment bindings.
  */
@@ -228,40 +326,42 @@ async function runIngestion(env: Env): Promise<void> {
     return;
   }
 
-  const store = env.STORE_NAME ?? "unknown";
-  const pdfUrls = (env.FLYER_PDF_URLS ?? "")
-    .split(",")
-    .map((u) => u.trim())
-    .filter(Boolean);
+  let totalUpserted = 0;
 
-  if (pdfUrls.length === 0) {
-    console.warn("No FLYER_PDF_URLS configured. Nothing to process.");
-    return;
-  }
-
-  let totalInserted = 0;
-
-  for (const url of pdfUrls) {
+  for (const target of STORE_TARGETS) {
     try {
-      console.log(`Processing flyer: ${url}`);
+      console.log(`[${target.name}] Discovering latest flyer URL…`);
+      const pdfUrl = await getLatestFlyerUrl(target.name);
 
-      // 1. Fetch PDF
-      const pdfBuffer = await fetchSupermarketPdf(url);
+      if (!pdfUrl) {
+        console.warn(`[${target.name}] No flyer URL found; skipping.`);
+        continue;
+      }
 
-      // 2. Extract sale items via Gemini AI
+      console.log(`[${target.name}] Fetching PDF: ${pdfUrl}`);
+      const pdfResponse = await fetchWithRetry(pdfUrl);
+      if (!pdfResponse.ok) {
+        console.error(
+          `[${target.name}] Failed to fetch PDF (${pdfResponse.status}): ${pdfUrl}`,
+        );
+        continue;
+      }
+      const pdfBuffer = await pdfResponse.arrayBuffer();
+
+      // Extract sale items via Gemini AI
       const items = await extractPromotionsFromPdf(pdfBuffer, env);
-      console.log(`Extracted ${items.length} sale items from ${url}`);
+      console.log(`[${target.name}] Extracted ${items.length} sale items`);
 
-      // 3. Persist to D1
-      const inserted = await insertPromotions(env.DB, store, items);
-      totalInserted += inserted;
-      console.log(`Inserted ${inserted} promotions from ${url}`);
+      // Upsert into D1
+      const upserted = await insertPromotions(env.DB, target.ico, items);
+      totalUpserted += upserted;
+      console.log(`[${target.name}] Upserted ${upserted} promotions`);
     } catch (err) {
-      console.error(`Error processing ${url}:`, err);
+      console.error(`[${target.name}] Unexpected error during ingestion:`, err);
     }
   }
 
-  console.log(`Ingestion complete. Total promotions inserted: ${totalInserted}`);
+  console.log(`Ingestion complete. Total promotions upserted: ${totalUpserted}`);
 }
 
 // ---------------------------------------------------------------------------
