@@ -1,2 +1,7 @@
 backend/__pycache__/
 *.pyc
+
+# Cloudflare Worker
+worker/node_modules/
+worker/dist/
+worker/.wrangler/
