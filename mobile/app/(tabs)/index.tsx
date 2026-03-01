@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useRouter } from "expo-router";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -28,6 +29,7 @@ import { usePantry } from "../../hooks/usePantry";
 import { Colors } from "../../constants/Colors";
 
 export default function ScannerTab(): React.JSX.Element {
+  const router = useRouter();
   const device = useCameraDevice("back");
   const [hasPermission, setHasPermission] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -190,6 +192,14 @@ export default function ScannerTab(): React.JSX.Element {
         {ingestError != null && (
           <Text style={styles.ingestError}>{ingestError}</Text>
         )}
+        <TouchableOpacity
+          onPress={() => router.push("/legal")}
+          accessibilityLabel="Právne informácie"
+        >
+          <Text style={styles.legalLink}>
+            Ochrana súkromia & Podmienky používania
+          </Text>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
@@ -256,4 +266,10 @@ const styles = StyleSheet.create({
   statusText: { color: Colors.text, fontSize: 14 },
   ingestSuccess: { color: Colors.success, fontSize: 12, marginTop: 4 },
   ingestError: { color: Colors.error, fontSize: 12, marginTop: 4 },
+  legalLink: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    marginTop: 8,
+    textDecorationLine: "underline",
+  },
 });

@@ -6,6 +6,18 @@
  *   2. Fetches the PDF with retry logic and exponential backoff
  *   3. Sends the PDF to the Gemini API for structured data extraction
  *   4. Upserts the extracted sale items into a Cloudflare D1 database
+ *
+ * LEGAL NOTICE — Flyer PDF Scraping:
+ *   This worker fetches publicly accessible retail flyer PDFs. Before deploying,
+ *   the operator MUST review each retailer's Terms of Service and robots.txt to
+ *   confirm that automated access is permitted:
+ *     - Lidl SK:     https://www.lidl.sk/robots.txt  (ToS at www.lidl.sk)
+ *     - Kaufland SK: https://www.kaufland.sk/robots.txt  (ToS at www.kaufland.sk)
+ *   If a retailer prohibits automated access, remove the corresponding entry from
+ *   STORE_TARGETS. The project maintainers make no representation regarding the
+ *   permissibility of scraping any specific retailer's website. Each operator
+ *   deploys this worker at their own legal risk.
+ *   See TERMS_OF_SERVICE.md §5 for the full disclaimer.
  */
 
 // ---------------------------------------------------------------------------
