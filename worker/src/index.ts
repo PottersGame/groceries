@@ -221,10 +221,12 @@ export async function fetchPdfAsBase64(
   const buffer = await response.arrayBuffer();
   const bytes = new Uint8Array(buffer);
 
-  // Convert to base64 in a Worker-safe way (no Node.js Buffer)
+  // Convert to base64 in chunks to avoid stack-overflow on large PDFs
+  const CHUNK_SIZE = 8192;
   let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, i + CHUNK_SIZE);
+    binary += String.fromCharCode(...chunk);
   }
   const base64 = btoa(binary);
 
