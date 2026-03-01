@@ -413,3 +413,80 @@ class TestStatistics:
         assert data["statistics"]["stores"] >= 1
         assert data["statistics"]["products"] >= 1
         assert data["statistics"]["price_observations"] >= 1
+
+
+class TestLatestPricePerStore:
+    """Tests that GET /prices returns the latest price per (product, store) pair."""
+
+    def test_returns_latest_price_only(self):
+        """Test that only the most recent price per store+product is returned."""
+        # Ingest two observations for the same product+store on different dates
+        payload_old = {
+            "observations": [
+                {
+                    "ico": "35532773",
+                    "normalizedName": "milk 1l",
+                    "price": 0.79,
+                    "date": "2024-01-01",
+                }
+            ]
+        }
+        payload_new = {
+            "observations": [
+                {
+                    "ico": "35532773",
+                    "normalizedName": "milk 1l",
+                    "price": 0.89,
+                    "date": "2024-06-10",
+                }
+            ]
+        }
+        client.post("/api/v1/prices/ingest", json=payload_old)
+        client.post("/api/v1/prices/ingest", json=payload_new)
+
+        response = client.get("/api/v1/prices?product_name=milk")
+        assert response.status_code == 200
+        data = response.json()
+        # Should return only one result (the latest) per store+product
+        milk_results = [r for r in data["results"] if "milk" in r["product_name"].lower()]
+        assert len(milk_results) == 1
+        # The latest price should be 0.89
+        assert float(milk_results[0]["price_eur"]) == 0.89
+
+    def test_known_store_gets_chain_name(self):
+        """Test that ingesting with a known IČO populates the chain name correctly."""
+        payload = {
+            "observations": [
+                {
+                    "ico": "35532773",  # Lidl
+                    "normalizedName": "water 0.5l",
+                    "price": 0.29,
+                    "date": "2024-06-10",
+                }
+            ]
+        }
+        client.post("/api/v1/prices/ingest", json=payload)
+
+        response = client.get("/api/v1/stores/35532773")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["store"]["chain_name"] == "Lidl"
+
+    def test_unknown_store_gets_fallback_name(self):
+        """Test that ingesting with an unknown IČO uses the fallback name."""
+        payload = {
+            "observations": [
+                {
+                    "ico": "99999999",  # Unknown store
+                    "normalizedName": "test product",
+                    "price": 1.00,
+                    "date": "2024-06-10",
+                }
+            ]
+        }
+        client.post("/api/v1/prices/ingest", json=payload)
+
+        response = client.get("/api/v1/stores/99999999")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["store"]["chain_name"] == "Store 99999999"

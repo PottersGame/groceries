@@ -9,6 +9,40 @@ import re
 import unicodedata
 
 
+# ---------------------------------------------------------------------------
+# Slovak store IČO → chain name lookup
+# ---------------------------------------------------------------------------
+
+#: Known Slovak retail chain IČOs and their human-readable names.
+#: IČO = Identifikačné číslo organizácie (8-digit company registration number).
+#: Add more entries as they become known to replace the "Store XXXXXXXX" fallback.
+SLOVAK_STORE_ICO_MAP: dict[str, str] = {
+    "35532773": "Lidl",
+    "31322571": "Tesco",
+    "35744771": "Albert",
+    "36488526": "Kaufland",
+    "31384943": "Billa",
+    "36170151": "Fresh",
+    "36487333": "CBA",
+    "36290904": "Coop Jednota",
+}
+
+
+def lookup_chain_name(ico: str) -> str:
+    """
+    Return the human-readable chain name for a Slovak store IČO.
+
+    Falls back to "Store {ico}" when the IČO is not in the lookup table.
+
+    Args:
+        ico: 8-digit Slovak IČO string.
+
+    Returns:
+        Chain name string, e.g. "Lidl" or "Store 99999999".
+    """
+    return SLOVAK_STORE_ICO_MAP.get(ico, f"Store {ico}")
+
+
 def normalize_product_name(name: str) -> str:
     """
     Normalize a product name for deduplication and matching.

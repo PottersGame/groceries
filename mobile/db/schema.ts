@@ -173,6 +173,31 @@ export const CREATE_SCHEMA_VERSION = `
   );
 ` as const;
 
+/**
+ * Offline ingestion queue table.
+ *
+ * Stores serialised {@link IngestionPayload} JSON blobs that could not be
+ * delivered to the backend (e.g. when the device was offline).  A background
+ * retry loop flushes the queue whenever network connectivity is restored.
+ */
+export const CREATE_INGEST_QUEUE = `
+  CREATE TABLE IF NOT EXISTS ingest_queue (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    -- JSON-serialised IngestionPayload (observations array)
+    payload_json TEXT NOT NULL,
+
+    -- Number of delivery attempts so far
+    attempts    INTEGER NOT NULL DEFAULT 0,
+
+    -- ISO-8601 timestamp of the last failed attempt (null = never tried)
+    last_error_at TEXT,
+
+    -- ISO-8601 timestamp when the row was created
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+` as const;
+
 // ---------------------------------------------------------------------------
 // Initialisation helper
 // ---------------------------------------------------------------------------
@@ -197,6 +222,7 @@ export async function initLocalDatabase(
     ${CREATE_SCHEMA_VERSION}
     ${CREATE_LOCAL_PANTRY}
     ${CREATE_SHOPPING_LIST}
+    ${CREATE_INGEST_QUEUE}
     ${TRIGGER_PANTRY_UPDATED_AT}
     ${TRIGGER_SHOPPING_UPDATED_AT}
     ${IDX_PANTRY_NORMALIZED_NAME}
@@ -207,4 +233,23 @@ export async function initLocalDatabase(
   `);
 
   return db;
+}
+
+// ---------------------------------------------------------------------------
+// Shared singleton — ensures a single DB connection across the whole app
+// ---------------------------------------------------------------------------
+
+/** Module-level promise so every caller shares one database connection. */
+let _dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+
+/**
+ * Returns the shared local SQLite database, initialising it on the first call.
+ *
+ * Safe to call concurrently — the promise is created once and reused.
+ */
+export function getLocalDatabase(): Promise<SQLite.SQLiteDatabase> {
+  if (!_dbPromise) {
+    _dbPromise = initLocalDatabase();
+  }
+  return _dbPromise;
 }

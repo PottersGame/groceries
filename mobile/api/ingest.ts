@@ -53,17 +53,16 @@ export function receiptToObservations(receipt: EKasaReceipt): PriceObservation[]
 export const BACKEND_BASE_URL: string =
   (process.env['EXPO_PUBLIC_BACKEND_URL'] as string | undefined) ?? 'http://localhost:8000'
 
-export async function ingestReceipt(
-  receipt: EKasaReceipt,
-  options?: { signal?: AbortSignal; fetchImpl?: typeof fetch }
+/**
+ * Sends a pre-built {@link IngestionPayload} to the backend.
+ *
+ * Use this when you already have observations (e.g. replaying from the offline
+ * queue), so the receipt-to-observations conversion step can be skipped.
+ */
+export async function sendIngestionPayload(
+  payload: IngestionPayload,
+  options?: { signal?: AbortSignal; fetchImpl?: typeof fetch },
 ): Promise<IngestionSuccessResponse> {
-  const observations = receiptToObservations(receipt)
-
-  if (observations.length === 0) {
-    throw new Error('No valid observations to ingest')
-  }
-
-  const payload: IngestionPayload = { observations }
   const fetchImpl = options?.fetchImpl ?? fetch
 
   const response = await fetchImpl(`${BACKEND_BASE_URL}/api/v1/prices/ingest`, {
@@ -85,4 +84,17 @@ export async function ingestReceipt(
   }
 
   return (await response.json()) as IngestionSuccessResponse
+}
+
+export async function ingestReceipt(
+  receipt: EKasaReceipt,
+  options?: { signal?: AbortSignal; fetchImpl?: typeof fetch }
+): Promise<IngestionSuccessResponse> {
+  const observations = receiptToObservations(receipt)
+
+  if (observations.length === 0) {
+    throw new Error('No valid observations to ingest')
+  }
+
+  return sendIngestionPayload({ observations }, options)
 }
