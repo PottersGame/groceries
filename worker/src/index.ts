@@ -194,7 +194,7 @@ Each element must have exactly these fields:
 - "product_name": string (normalized, lowercase, no diacritics)
 - "sale_price": number
 - "original_price": a number, or null if the original non-discounted price is not shown or cannot be determined
-- "category": string (e.g., "dairy", "meat", "bakery", "pantry")
+- "category": one of "dairy", "meat", "bakery", "produce", "beverages", "frozen", "pantry", "snacks", "household", "personal care", "alcohol", "deli", or "other"
 - "start_date": string (ISO 8601 date, e.g. "2024-01-15"; use today's date if not shown)
 - "end_date": string or null (ISO 8601 date, or null if not shown)`;
 

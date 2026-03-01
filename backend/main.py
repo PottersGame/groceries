@@ -30,7 +30,7 @@ from .schemas import (
     PromotionsIngestionResponse,
     PromotionsQueryResponse,
 )
-from .utils import normalize_product_name, lookup_chain_name
+from .utils import lookup_chain_name, normalize_category, normalize_product_name
 
 # ---------------------------------------------------------------------------
 # Application Lifecycle
@@ -477,6 +477,9 @@ def ingest_promotions(
             # 2. Normalize the product name
             normalized = normalize_product_name(item.productName)
 
+            # Normalize the category to a canonical value
+            normalized_category = normalize_category(item.category)
+
             # 3. Get or create the product
             product = (
                 db.query(Product).filter(Product.normalized_name == normalized).first()
@@ -485,10 +488,13 @@ def ingest_promotions(
                 product = Product(
                     normalized_name=normalized,
                     display_name=item.productName,
-                    category=item.category,
+                    category=normalized_category,
                 )
                 db.add(product)
                 db.flush()
+            elif normalized_category is not None and product.category is None:
+                # Backfill category for an existing product that has none yet
+                product.category = normalized_category
 
             # 4. Default valid_to to valid_from + 7 days if not provided
             valid_to = item.validTo or (item.validFrom + timedelta(days=7))
