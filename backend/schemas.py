@@ -137,6 +137,8 @@ class PriceQueryParams(BaseModel):
 class PriceEntry(BaseModel):
     """A single price observation with store and product details."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     product_id: int
     product_name: str
     store_ico: str
@@ -144,9 +146,6 @@ class PriceEntry(BaseModel):
     price_eur: Decimal
     observed_on: DateType
     ingested_at: str  # ISO-8601 timestamp
-
-    class Config:
-        from_attributes = True  # Allow ORM model → Pydantic conversion
 
 
 class PriceQueryResponse(BaseModel):
@@ -255,6 +254,8 @@ class PromotionsIngestionResponse(BaseModel):
 class PromoEntry(BaseModel):
     """A single promotional price entry with store and product details."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     product_name: str
     store_ico: str
     store_chain: str
@@ -263,9 +264,6 @@ class PromoEntry(BaseModel):
     valid_from: DateType
     valid_to: DateType
     category: str | None
-
-    class Config:
-        from_attributes = True
 
 
 class PromotionsQueryResponse(BaseModel):
