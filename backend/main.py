@@ -138,7 +138,7 @@ def ingest_prices(
                 store_id=store.id,
                 product_id=product.id,
                 price_eur=obs.price,
-                observed_on=obs.date,
+                observed_on=obs.observed_on,
             )
             db.add(price_record)
 
