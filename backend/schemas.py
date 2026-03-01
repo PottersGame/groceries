@@ -42,9 +42,8 @@ class PriceObservation(BaseModel):
         description="Price paid in EUR (must be positive)",
         examples=[0.89],
     )
-    date: str = Field(
+    date: date = Field(
         ...,
-        pattern=r"^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$",
         description="ISO-8601 purchase date (YYYY-MM-DD)",
         examples=["2024-06-10"],
     )
