@@ -18,14 +18,14 @@ mobile/
     prices.ts        — Store listing, price queries, product search & promotions
 
 backend/
-  main.py            — FastAPI REST API with 13 endpoints
+  main.py            — FastAPI REST API with 9 endpoints
   models.py          — SQLAlchemy PostgreSQL schema
                        (stores, products, prices_crowdsourced, prices_flyer_promo)
   schemas.py         — Pydantic validation models for API requests/responses
   utils.py           — Product name normalization & utilities
   database.py        — Database connection & session management
   config.py          — Environment-based configuration
-  tests/             — Comprehensive test suite (30 tests)
+  tests/             — Comprehensive test suite (48 tests)
   docker-compose.yml — Complete dev environment with PostgreSQL
   README.md          — Full API documentation (600+ lines)
 
@@ -43,7 +43,7 @@ worker/
 A production-ready REST API built with FastAPI and SQLAlchemy:
 
 ### Core Features
-- **13 API endpoints** for price ingestion, promotions, queries, store management, and product search
+- **9 API endpoints** for price ingestion, promotions, queries, store management, and product search
 - **Privacy-first design** — zero personal data collection
 - **Promotions pipeline** — ingest and query flyer deals from the Cloudflare Worker
 - **Slovak market support** — IČO validation, diacritic handling
@@ -84,12 +84,13 @@ Key design decisions:
 
 ## Step 2 — Mobile SQLite Schema (`mobile/db/schema.ts`)
 
-Two expo-sqlite tables initialised by `initLocalDatabase()`:
+Three expo-sqlite tables initialised by `initLocalDatabase()`:
 
 | Table | Description |
 |---|---|
 | `local_pantry` | Items identified from scanned eKasa receipts; persisted on-device only |
 | `shopping_list` | User-curated buy list with optional price hints fetched from the backend |
+| `ingest_queue` | Offline queue: serialised `IngestionPayload` blobs retried when connectivity is restored |
 
 Schema features:
 - `PRAGMA foreign_keys = ON` and `PRAGMA journal_mode = WAL` applied on every open.
@@ -130,7 +131,7 @@ The file also exports:
 A CRON-triggered Cloudflare Worker that automates the flyer PDF → sale data pipeline:
 
 1. **Fetches** supermarket flyer PDFs from configured URLs
-2. **Sends** each PDF to Google's **Gemini 2.0 Flash-Lite** vision model
+2. **Sends** each PDF to Google's **Gemini 2.5 Flash** vision model
 3. **Extracts** structured JSON sale items via a strict system prompt
 4. **Persists** results to a **Cloudflare D1** database
 5. **Forwards** extracted promotions to the backend API for central availability
@@ -138,8 +139,8 @@ A CRON-triggered Cloudflare Worker that automates the flyer PDF → sale data pi
 | File | Description |
 |---|---|
 | `schema.sql` | D1 `promotions` table with CHECK constraints and indexes |
-| `wrangler.toml` | CRON schedule (`0 4 * * *`) and D1 binding |
-| `src/index.ts` | Worker entry point: `scheduled()` handler + `extractSalesWithGemini()` |
+| `wrangler.toml` | CRON schedule (`0 2 * * 1` — every Monday at 02:00 UTC) and D1 binding |
+| `src/index.ts` | Worker entry point: `scheduled()` + HTTP `fetch()` handlers, `extractPromotionsFromPdf()` |
 
 ### Setup
 
@@ -156,6 +157,49 @@ wrangler deploy                              # deploy the worker
 
 ---
 
+## Step 5 — Mobile App Screens (`mobile/app/`)
+
+Four tab screens built with Expo Router:
+
+| Screen | File | Description |
+|---|---|---|
+| **Scanner** | `app/(tabs)/index.tsx` | QR code scanner — fetches eKasa receipt, adds items to pantry, ingests prices anonymously |
+| **Pantry** | `app/(tabs)/pantry.tsx` | Local inventory view — browse, search, update quantities, add items to shopping list |
+| **Shopping** | `app/(tabs)/shopping.tsx` | Shopping list — add/check/remove items with estimated total cost |
+| **Shops** | `app/(tabs)/shops.tsx` | Price comparison — search prices across stores and browse active flyer promotions |
+
+Supporting modules:
+
+| File | Purpose |
+|---|---|
+| `hooks/useIngest.ts` | React hook wrapping `ingestReceipt()` with loading/error state |
+| `hooks/usePantry.ts` | CRUD operations on the local `local_pantry` SQLite table |
+| `hooks/useShoppingList.ts` | CRUD operations on the local `shopping_list` SQLite table |
+| `hooks/useShopFinder.ts` | Location-aware shop recommendation using backend price data |
+| `constants/Colors.ts` | Shared colour palette |
+
+---
+
+## MVP Status
+
+All core MVP components are implemented and tested:
+
+| Component | Status | Notes |
+|---|---|---|
+| Backend API (9 endpoints) | ✅ Complete | 31 integration tests, 100% passing |
+| Backend utility functions | ✅ Complete | 17 unit tests, 100% passing |
+| Mobile SQLite schema | ✅ Complete | 3 tables + triggers + indexes |
+| API contract & validators | ✅ Complete | TypeScript types + client-side validation |
+| eKasa QR scanning | ✅ Complete | UID extraction + API fetch with mock fallback |
+| Anonymous price ingestion | ✅ Complete | 6 mobile tests, 100% passing |
+| Mobile app screens (4 tabs) | ✅ Complete | Scanner, Pantry, Shopping, Shops |
+| Cloudflare Worker flyer pipeline | ✅ Complete | Gemini 2.5 Flash extraction + D1 upsert + backend forwarding |
+| Docker dev environment | ✅ Complete | PostgreSQL + FastAPI in one command |
+
+**The project is MVP-ready.** Users can scan Slovak eKasa receipts, track their pantry on-device, compare prices across stores, and browse weekly flyer promotions — all with zero personal data collection.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -165,5 +209,5 @@ wrangler deploy                              # deploy the worker
 | Mobile Scanner | react-native-vision-camera + Slovak eKasa API |
 | Backend API | Python (FastAPI) |
 | Backend DB | PostgreSQL via Supabase |
-| Data Pipeline | Cloudflare Worker + Gemini 2.0 Flash-Lite vision AI |
+| Data Pipeline | Cloudflare Worker + Gemini 2.5 Flash vision AI |
 | Edge Database | Cloudflare D1 (SQLite) |
