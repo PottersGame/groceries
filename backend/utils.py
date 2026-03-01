@@ -97,6 +97,135 @@ def normalize_product_name(name: str) -> str:
     return normalized
 
 
+# ---------------------------------------------------------------------------
+# Product category normalization
+# ---------------------------------------------------------------------------
+
+#: Canonical product category labels.  All categories stored in the database
+#: MUST be one of these strings (or None).  Use normalize_category() to map
+#: arbitrary input strings (e.g. from Gemini AI or receipt data) to this set.
+CANONICAL_CATEGORIES: frozenset[str] = frozenset({
+    "dairy",        # mliečné výrobky
+    "meat",         # mäso a mäsové výrobky
+    "bakery",       # pekárenské výrobky
+    "produce",      # ovocie a zelenina
+    "beverages",    # nápoje (non-alcoholic)
+    "frozen",       # mrazené potraviny
+    "pantry",       # trvanlivé potraviny
+    "snacks",       # snacky a pochutiny
+    "household",    # domácnosť
+    "personal care",  # kozmetika a hygiena
+    "alcohol",      # alkohol
+    "deli",         # lahôdky a údeniny
+    "other",        # ostatné
+})
+
+#: Alias → canonical category.  Keys must already be in normalised form
+#: (lowercase, diacritics stripped, non-alphanumeric replaced with spaces,
+#: extra whitespace collapsed).
+_CATEGORY_ALIASES: dict[str, str] = {
+    # dairy aliases
+    "milk products": "dairy",
+    "mliecne vyrobky": "dairy",    # mliečné výrobky
+    # meat aliases
+    "maso": "meat",                # mäso
+    "poultry": "meat",
+    # bakery aliases
+    "bread": "bakery",
+    "pastry": "bakery",
+    "baked goods": "bakery",
+    # produce aliases
+    "fruit": "produce",
+    "fruits": "produce",
+    "vegetables": "produce",
+    "ovocie a zelenina": "produce",
+    # beverages aliases
+    "drinks": "beverages",
+    "soft drinks": "beverages",
+    "napoje": "beverages",         # nápoje
+    # frozen aliases
+    "frozen foods": "frozen",
+    "ice cream": "frozen",
+    "mrazene": "frozen",           # mrazené
+    # pantry aliases
+    "dry goods": "pantry",
+    "canned goods": "pantry",
+    # snacks aliases
+    "confectionery": "snacks",
+    "candy": "snacks",
+    "chips": "snacks",
+    # household aliases
+    "cleaning": "household",
+    "cleaning products": "household",
+    # personal care aliases
+    "hygiene": "personal care",
+    "personal care products": "personal care",
+    "personal_care": "personal care",
+    "kozmetika": "personal care",  # kozmetika
+    # alcohol aliases
+    "alcoholic beverages": "alcohol",
+    "beer": "alcohol",
+    "wine": "alcohol",
+    # deli aliases
+    "cold cuts": "deli",
+    "delicatessen": "deli",
+    "lahudky": "deli",             # lahôdky
+}
+
+
+def normalize_category(category: str | None) -> str | None:
+    """
+    Normalize a product category string to a canonical value.
+
+    Applies the same lowercasing and diacritic-stripping as
+    normalize_product_name(), then maps the result to a value from
+    CANONICAL_CATEGORIES via direct match or the _CATEGORY_ALIASES table.
+
+    Args:
+        category: Raw category string from any data source.
+
+    Returns:
+        A canonical category string from CANONICAL_CATEGORIES, or None if the
+        input is None, empty, or cannot be mapped to a known category.
+
+    Examples:
+        >>> normalize_category("Dairy")
+        'dairy'
+
+        >>> normalize_category("Mäso")
+        'meat'
+
+        >>> normalize_category("unknown stuff")
+
+        >>> normalize_category(None)
+    """
+    if not category:
+        return None
+
+    # Apply the same normalization as product names:
+    # 1. Lowercase
+    normalized = category.lower()
+    # 2. Strip diacritics
+    normalized = unicodedata.normalize("NFD", normalized)
+    normalized = "".join(
+        char for char in normalized if unicodedata.category(char) != "Mn"
+    )
+    # 3. Replace non-alphanumeric (except spaces) with spaces
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    # 4. Collapse whitespace
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    if not normalized:
+        return None
+
+    # Direct match against canonical set
+    if normalized in CANONICAL_CATEGORIES:
+        return normalized
+
+    # Alias lookup
+    return _CATEGORY_ALIASES.get(normalized)
+
+
 def extract_quantity_hint(name: str) -> tuple[str, float | None, str | None]:
     """
     Attempt to extract quantity information from a product name.

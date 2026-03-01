@@ -723,3 +723,172 @@ class TestPromotionsQuery:
             r for r in data["results"] if "historicky produkt" in r["product_name"]
         ]
         assert len(expired_results) >= 1
+
+
+class TestCategoryNormalization:
+    """Tests that product categories are normalised and backfilled consistently."""
+
+    def test_promo_category_lowercased(self):
+        """Uppercase category is normalised to lowercase when ingesting a promo."""
+        today = date.today()
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "jogurt biely 150g",
+                    "salePrice": 0.49,
+                    "category": "Dairy",    # non-canonical casing
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+        ingest_resp = client.post("/api/v1/promotions/ingest", json=payload)
+        assert ingest_resp.status_code == 201
+
+        response = client.get("/api/v1/promotions?product_name=jogurt biely")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] >= 1
+        assert data["results"][0]["category"] == "dairy"
+
+    def test_promo_category_alias_normalised(self):
+        """A recognised alias is mapped to the canonical category name."""
+        today = date.today()
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "mineral water 1l",
+                    "salePrice": 0.29,
+                    "category": "Soft Drinks",  # alias → beverages
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+        ingest_resp = client.post("/api/v1/promotions/ingest", json=payload)
+        assert ingest_resp.status_code == 201
+
+        response = client.get("/api/v1/promotions?product_name=mineral water")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] >= 1
+        assert data["results"][0]["category"] == "beverages"
+
+    def test_promo_unknown_category_stored_as_none(self):
+        """An unrecognised category is stored as None rather than verbatim."""
+        today = date.today()
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "exotic item xyz",
+                    "salePrice": 1.99,
+                    "category": "completely unknown",
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+        ingest_resp = client.post("/api/v1/promotions/ingest", json=payload)
+        assert ingest_resp.status_code == 201
+
+        response = client.get("/api/v1/promotions?product_name=exotic item")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] >= 1
+        assert data["results"][0]["category"] is None
+
+    def test_category_backfilled_from_promo(self):
+        """
+        A product created without a category (from crowdsourced data) gets its
+        category filled in when the same product is later ingested via a promo.
+        """
+        today = date.today()
+
+        # 1. Create product via crowdsourced ingestion — no category
+        crowdsourced_payload = {
+            "observations": [
+                {
+                    "ico": "35532773",
+                    "normalizedName": "maslo 250g",
+                    "price": 1.89,
+                    "date": today.isoformat(),
+                }
+            ]
+        }
+        ingest_resp = client.post("/api/v1/prices/ingest", json=crowdsourced_payload)
+        assert ingest_resp.status_code == 201
+
+        # Verify product exists but has no category yet
+        search = client.get("/api/v1/products/search?q=maslo")
+        assert search.status_code == 200
+        products = search.json()["products"]
+        assert len(products) >= 1
+        assert products[0]["category"] is None
+
+        # 2. Ingest a promo for the same product with a canonical category
+        promo_payload = {
+            "items": [
+                {
+                    "ico": "36488526",   # different store (Kaufland)
+                    "productName": "maslo 250g",
+                    "salePrice": 1.49,
+                    "category": "dairy",
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+        promo_resp = client.post("/api/v1/promotions/ingest", json=promo_payload)
+        assert promo_resp.status_code == 201
+
+        # 3. Verify category has been backfilled on the shared product record
+        search2 = client.get("/api/v1/products/search?q=maslo")
+        assert search2.status_code == 200
+        products2 = search2.json()["products"]
+        assert len(products2) >= 1
+        assert products2[0]["category"] == "dairy"
+
+    def test_existing_category_not_overwritten(self):
+        """An existing product category is not changed by a second promo ingestion."""
+        today = date.today()
+
+        # Ingest first promo — sets category to "meat"
+        payload1 = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "kura cerstve",
+                    "salePrice": 2.99,
+                    "category": "meat",
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+        ingest1_resp = client.post("/api/v1/promotions/ingest", json=payload1)
+        assert ingest1_resp.status_code == 201
+
+        # Ingest second promo for the same product with a different category
+        payload2 = {
+            "items": [
+                {
+                    "ico": "36488526",
+                    "productName": "kura cerstve",
+                    "salePrice": 2.79,
+                    "category": "frozen",  # different — should not overwrite
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+        ingest2_resp = client.post("/api/v1/promotions/ingest", json=payload2)
+        assert ingest2_resp.status_code == 201
+
+        search = client.get("/api/v1/products/search?q=kura cerstve")
+        assert search.status_code == 200
+        products = search.json()["products"]
+        assert len(products) >= 1
+        assert products[0]["category"] == "meat"

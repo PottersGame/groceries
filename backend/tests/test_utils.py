@@ -4,7 +4,7 @@ Tests for product name normalization utilities.
 
 import pytest
 
-from backend.utils import extract_quantity_hint, lookup_chain_name, normalize_product_name
+from backend.utils import extract_quantity_hint, lookup_chain_name, normalize_category, normalize_product_name
 
 
 class TestNormalizeProductName:
@@ -115,3 +115,46 @@ class TestLookupChainName:
     def test_unknown_ico_different(self):
         """Test fallback with another unknown IČO."""
         assert lookup_chain_name("12345678") == "Store 12345678"
+
+
+class TestNormalizeCategory:
+    """Tests for normalize_category function."""
+
+    def test_canonical_category_passthrough(self):
+        """Canonical category values are returned unchanged."""
+        assert normalize_category("dairy") == "dairy"
+        assert normalize_category("bakery") == "bakery"
+        assert normalize_category("pantry") == "pantry"
+        assert normalize_category("produce") == "produce"
+
+    def test_uppercase_category(self):
+        """Uppercase input is lowercased to match the canonical form."""
+        assert normalize_category("Dairy") == "dairy"
+        assert normalize_category("MEAT") == "meat"
+        assert normalize_category("Bakery") == "bakery"
+
+    def test_diacritic_category(self):
+        """Slovak diacritics are stripped before matching."""
+        assert normalize_category("Mäso") == "meat"      # mäso → maso alias
+        assert normalize_category("mrazené") == "frozen"  # mrazené → mrazene alias
+
+    def test_category_alias(self):
+        """Known aliases map to their canonical category."""
+        assert normalize_category("Milk Products") == "dairy"
+        assert normalize_category("Frozen Foods") == "frozen"
+        assert normalize_category("Alcoholic Beverages") == "alcohol"
+        assert normalize_category("Cold Cuts") == "deli"
+
+    def test_unknown_category_returns_none(self):
+        """Unrecognised category strings return None."""
+        assert normalize_category("unknown stuff") is None
+        assert normalize_category("random") is None
+
+    def test_none_input(self):
+        """None input returns None."""
+        assert normalize_category(None) is None
+
+    def test_empty_string(self):
+        """Empty or whitespace-only input returns None."""
+        assert normalize_category("") is None
+        assert normalize_category("   ") is None
