@@ -17,6 +17,12 @@ mobile/
 backend/
   models.py          — SQLAlchemy PostgreSQL schema
                        (stores, products, prices_crowdsourced, prices_flyer_promo)
+
+worker/
+  schema.sql         — Cloudflare D1 schema for the Promotions table
+  wrangler.toml      — CRON trigger & D1 binding configuration
+  src/
+    index.ts         — Cloudflare Worker: Gemini vision AI flyer ingestion pipeline
 ```
 
 ---
@@ -82,6 +88,35 @@ The file also exports:
 
 ---
 
+## Step 4 — Cloudflare Worker: Flyer Ingestion (`worker/`)
+
+A CRON-triggered Cloudflare Worker that automates the flyer PDF → sale data pipeline:
+
+1. **Fetches** supermarket flyer PDFs from configured URLs
+2. **Sends** each PDF to Google's **Gemini 2.0 Flash-Lite** vision model
+3. **Extracts** structured JSON sale items via a strict system prompt
+4. **Persists** results to a **Cloudflare D1** database
+
+| File | Description |
+|---|---|
+| `schema.sql` | D1 `promotions` table with CHECK constraints and indexes |
+| `wrangler.toml` | CRON schedule (`0 4 * * *`) and D1 binding |
+| `src/index.ts` | Worker entry point: `scheduled()` handler + `extractSalesWithGemini()` |
+
+### Setup
+
+```bash
+cd worker
+npm install
+wrangler d1 create pantrypal-sk-db          # create the D1 database
+# Update wrangler.toml with the returned database_id
+npm run d1:init                              # apply schema.sql
+wrangler secret put GEMINI_API_KEY           # set your Google AI Studio key
+wrangler deploy                              # deploy the worker
+```
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -91,4 +126,5 @@ The file also exports:
 | Mobile Scanner | react-native-vision-camera + Slovak eKasa API |
 | Backend API | Python (FastAPI) |
 | Backend DB | PostgreSQL via Supabase |
-| Data Pipeline | Python + LLM (Gemini / GPT-4o) for PDF flyer parsing |
+| Data Pipeline | Cloudflare Worker + Gemini 2.0 Flash-Lite vision AI |
+| Edge Database | Cloudflare D1 (SQLite) |
