@@ -8,17 +8,20 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from backend.database import get_db
 from backend.main import app
 from backend.models import Base, Product, Store
 
-# Test database URL (use in-memory SQLite for tests)
+# Test database URL (use in-memory SQLite for tests with StaticPool)
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 
-# Create test engine and session
+# Create test engine and session with StaticPool to maintain connection
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,  # Use StaticPool to share connection in memory
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -35,16 +38,25 @@ def override_get_db():
 # Override the dependency
 app.dependency_overrides[get_db] = override_get_db
 
+# Create all tables once
+Base.metadata.create_all(bind=engine)
+
 # Create test client
 client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def setup_database():
-    """Create tables before each test and drop after."""
-    Base.metadata.create_all(bind=engine)
+def cleanup_database():
+    """Clean up database after each test."""
     yield
-    Base.metadata.drop_all(bind=engine)
+    # Clear all data but keep tables
+    db = TestingSessionLocal()
+    try:
+        for table in reversed(Base.metadata.sorted_tables):
+            db.execute(table.delete())
+        db.commit()
+    finally:
+        db.close()
 
 
 class TestHealthCheck:
@@ -79,6 +91,7 @@ class TestPriceIngestion:
         response = client.post("/api/v1/prices/ingest", json=payload)
         assert response.status_code == 201
         data = response.json()
+        print(f"Response data: {data}")  # Debug output
         assert data["status"] == "ok"
         assert data["accepted"] == 1
         assert data["rejected"] == 0
