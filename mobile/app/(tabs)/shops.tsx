@@ -1,8 +1,9 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
   SafeAreaView,
+  SectionList,
   StyleSheet,
   Text,
   TextInput,
@@ -12,11 +13,34 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 
 import { useShopFinder, type ShopRecommendation } from "../../hooks/useShopFinder";
+import { fetchPromotions, type PromoResult } from "../../api/prices";
 import { Colors } from "../../constants/Colors";
 
 export default function ShopsTab(): React.JSX.Element {
   const { recommendations, isLoading, error, search, location } = useShopFinder();
   const [searchText, setSearchText] = useState("");
+  const [promos, setPromos] = useState<PromoResult[]>([]);
+  const [promosLoading, setPromosLoading] = useState(false);
+  const [activeView, setActiveView] = useState<"compare" | "deals">("deals");
+
+  // Fetch active promotions on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setPromosLoading(true);
+      try {
+        const results = await fetchPromotions({ activeOnly: true, limit: 50 });
+        if (!cancelled) setPromos(results);
+      } catch {
+        // Silently fail — deals are optional
+      } finally {
+        if (!cancelled) setPromosLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSearch = useCallback(() => {
     const terms = searchText
@@ -24,6 +48,7 @@ export default function ShopsTab(): React.JSX.Element {
       .map((t) => t.trim())
       .filter(Boolean);
     if (terms.length === 0) return;
+    setActiveView("compare");
     void search(terms);
   }, [searchText, search]);
 
@@ -58,6 +83,43 @@ export default function ShopsTab(): React.JSX.Element {
               </View>
             )}
           </View>
+        </View>
+      </View>
+    ),
+    []
+  );
+
+  const renderPromo = useCallback(
+    ({ item }: { item: PromoResult }) => (
+      <View style={styles.promoCard}>
+        <View style={styles.promoHeader}>
+          <Text style={styles.promoName} numberOfLines={1}>
+            {item.product_name}
+          </Text>
+          {item.category && (
+            <Text style={styles.promoCategoryBadge}>{item.category}</Text>
+          )}
+        </View>
+        <View style={styles.promoPriceRow}>
+          <Text style={styles.promoSalePrice}>
+            {item.promo_price_eur.toFixed(2)} €
+          </Text>
+          {item.regular_price_eur && (
+            <Text style={styles.promoOriginalPrice}>
+              {item.regular_price_eur.toFixed(2)} €
+            </Text>
+          )}
+          {item.regular_price_eur && (
+            <Text style={styles.promoDiscount}>
+              -{Math.round((1 - item.promo_price_eur / item.regular_price_eur) * 100)}%
+            </Text>
+          )}
+        </View>
+        <View style={styles.promoFooter}>
+          <Text style={styles.promoStore}>{item.store_chain}</Text>
+          <Text style={styles.promoValidity}>
+            {item.valid_from} — {item.valid_to}
+          </Text>
         </View>
       </View>
     ),
@@ -100,40 +162,122 @@ export default function ShopsTab(): React.JSX.Element {
         )}
       </View>
 
-      {/* Results */}
-      {isLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-          <Text style={styles.loadingText}>Porovnávam ceny...</Text>
-        </View>
-      ) : error ? (
-        <View style={styles.center}>
-          <Ionicons name="alert-circle-outline" size={48} color={Colors.error} />
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
-      ) : recommendations.length === 0 ? (
-        <View style={styles.center}>
-          <Ionicons name="storefront-outline" size={64} color={Colors.textMuted} />
-          <Text style={styles.emptyText}>
-            Nájdite najlepší obchod pre váš nákup.
+      {/* View toggle */}
+      <View style={styles.toggleRow}>
+        <TouchableOpacity
+          style={[styles.toggleBtn, activeView === "deals" && styles.toggleBtnActive]}
+          onPress={() => setActiveView("deals")}
+        >
+          <Ionicons
+            name="flame-outline"
+            size={16}
+            color={activeView === "deals" ? Colors.white : Colors.textMuted}
+          />
+          <Text
+            style={[
+              styles.toggleText,
+              activeView === "deals" && styles.toggleTextActive,
+            ]}
+          >
+            Akcie z letákov
           </Text>
-          <Text style={styles.emptySubtext}>
-            Zadajte produkty, ktoré chcete kúpiť, a porovnáme ceny v rôznych obchodoch.
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.toggleBtn,
+            activeView === "compare" && styles.toggleBtnActive,
+          ]}
+          onPress={() => setActiveView("compare")}
+        >
+          <Ionicons
+            name="swap-horizontal-outline"
+            size={16}
+            color={activeView === "compare" ? Colors.white : Colors.textMuted}
+          />
+          <Text
+            style={[
+              styles.toggleText,
+              activeView === "compare" && styles.toggleTextActive,
+            ]}
+          >
+            Porovnanie cien
           </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={recommendations}
-          keyExtractor={(item) => item.store.ico}
-          renderItem={renderRecommendation}
-          contentContainerStyle={styles.listContent}
-          ListHeaderComponent={
-            <Text style={styles.resultsHeader}>
-              {recommendations.length}{" "}
-              {recommendations.length === 1 ? "obchod nájdený" : "obchodov nájdených"}
-            </Text>
-          }
-        />
+        </TouchableOpacity>
+      </View>
+
+      {/* Deals view */}
+      {activeView === "deals" && (
+        <>
+          {promosLoading ? (
+            <View style={styles.center}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+              <Text style={styles.loadingText}>Načítavam akcie...</Text>
+            </View>
+          ) : promos.length === 0 ? (
+            <View style={styles.center}>
+              <Ionicons name="flame-outline" size={64} color={Colors.textMuted} />
+              <Text style={styles.emptyText}>Žiadne aktuálne akcie.</Text>
+              <Text style={styles.emptySubtext}>
+                Akcie z letákov sa aktualizujú automaticky každý týždeň.
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              data={promos}
+              keyExtractor={(_, i) => `promo-${i}`}
+              renderItem={renderPromo}
+              contentContainerStyle={styles.listContent}
+              ListHeaderComponent={
+                <Text style={styles.resultsHeader}>
+                  🔥 {promos.length} akciových ponúk
+                </Text>
+              }
+            />
+          )}
+        </>
+      )}
+
+      {/* Comparison view */}
+      {activeView === "compare" && (
+        <>
+          {isLoading ? (
+            <View style={styles.center}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+              <Text style={styles.loadingText}>Porovnávam ceny...</Text>
+            </View>
+          ) : error ? (
+            <View style={styles.center}>
+              <Ionicons name="alert-circle-outline" size={48} color={Colors.error} />
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          ) : recommendations.length === 0 ? (
+            <View style={styles.center}>
+              <Ionicons name="storefront-outline" size={64} color={Colors.textMuted} />
+              <Text style={styles.emptyText}>
+                Nájdite najlepší obchod pre váš nákup.
+              </Text>
+              <Text style={styles.emptySubtext}>
+                Zadajte produkty, ktoré chcete kúpiť, a porovnáme ceny v rôznych
+                obchodoch.
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              data={recommendations}
+              keyExtractor={(item) => item.store.ico}
+              renderItem={renderRecommendation}
+              contentContainerStyle={styles.listContent}
+              ListHeaderComponent={
+                <Text style={styles.resultsHeader}>
+                  {recommendations.length}{" "}
+                  {recommendations.length === 1
+                    ? "obchod nájdený"
+                    : "obchodov nájdených"}
+                </Text>
+              }
+            />
+          )}
+        </>
       )}
     </SafeAreaView>
   );
@@ -141,7 +285,7 @@ export default function ShopsTab(): React.JSX.Element {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  searchSection: { padding: 12 },
+  searchSection: { padding: 12, paddingBottom: 0 },
   searchLabel: {
     color: Colors.textSecondary,
     fontSize: 13,
@@ -170,9 +314,41 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 8,
   },
+  toggleRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  toggleBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: Colors.surface,
+  },
+  toggleBtnActive: {
+    backgroundColor: Colors.primary,
+  },
+  toggleText: {
+    color: Colors.textMuted,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  toggleTextActive: {
+    color: Colors.white,
+  },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   loadingText: { color: Colors.textSecondary, fontSize: 14, marginTop: 12 },
-  errorText: { color: Colors.error, fontSize: 14, marginTop: 12, textAlign: "center" },
+  errorText: {
+    color: Colors.error,
+    fontSize: 14,
+    marginTop: 12,
+    textAlign: "center",
+  },
   emptyText: { color: Colors.textSecondary, fontSize: 16, marginTop: 12 },
   emptySubtext: {
     color: Colors.textMuted,
@@ -216,4 +392,72 @@ const styles = StyleSheet.create({
   statsRow: { flexDirection: "row", gap: 16, marginTop: 8 },
   stat: { flexDirection: "row", alignItems: "center", gap: 4 },
   statText: { color: Colors.textSecondary, fontSize: 12 },
+  // Promo card styles
+  promoCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 8,
+  },
+  promoHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  promoName: {
+    color: Colors.text,
+    fontSize: 15,
+    fontWeight: "600",
+    flex: 1,
+  },
+  promoCategoryBadge: {
+    color: Colors.primary,
+    fontSize: 11,
+    backgroundColor: Colors.primaryDim,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    overflow: "hidden",
+    marginLeft: 8,
+  },
+  promoPriceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 6,
+  },
+  promoSalePrice: {
+    color: Colors.success,
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  promoOriginalPrice: {
+    color: Colors.textMuted,
+    fontSize: 14,
+    textDecorationLine: "line-through",
+  },
+  promoDiscount: {
+    color: Colors.error,
+    fontSize: 12,
+    fontWeight: "700",
+    backgroundColor: "rgba(248, 113, 113, 0.15)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  promoFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  promoStore: {
+    color: Colors.warning,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  promoValidity: {
+    color: Colors.textMuted,
+    fontSize: 11,
+  },
 });

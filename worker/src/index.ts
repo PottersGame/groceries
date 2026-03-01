@@ -17,6 +17,8 @@ export interface Env {
   DB: D1Database;
   /** Google AI Studio API key (set via `wrangler secret put GEMINI_API_KEY`) */
   GEMINI_API_KEY: string;
+  /** Backend API base URL (set via `wrangler secret put BACKEND_API_URL`) */
+  BACKEND_API_URL?: string;
 }
 
 /** A single sale item extracted from a flyer by the Gemini model. */
@@ -316,6 +318,63 @@ export async function insertPromotions(
 }
 
 // ---------------------------------------------------------------------------
+// Backend API Forwarding
+// ---------------------------------------------------------------------------
+
+/**
+ * Forwards extracted sale items to the PantryPal SK backend API.
+ *
+ * This ensures promotional data from D1 (edge) also reaches the central
+ * PostgreSQL database, making it available to the mobile app's price
+ * comparison features.
+ *
+ * @param env      - Worker environment bindings (provides BACKEND_API_URL).
+ * @param storeIco - ICO of the store.
+ * @param items    - Array of validated sale items from Gemini.
+ */
+export async function forwardToBackend(
+  env: Env,
+  storeIco: string,
+  items: SaleItem[],
+): Promise<void> {
+  const backendUrl = env.BACKEND_API_URL;
+  if (!backendUrl || items.length === 0) return;
+
+  const payload = {
+    items: items.map((item) => ({
+      ico: storeIco,
+      productName: item.product_name,
+      salePrice: item.sale_price,
+      originalPrice: item.original_price,
+      category: item.category,
+      validFrom: item.start_date,
+      validTo: item.end_date,
+    })),
+  };
+
+  try {
+    const response = await fetch(`${backendUrl}/api/v1/promotions/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      console.warn(
+        `forwardToBackend: backend returned ${response.status} for ${storeIco}`,
+      );
+    } else {
+      const data = (await response.json()) as { accepted?: number };
+      console.log(
+        `forwardToBackend: backend accepted ${data.accepted ?? 0} items for ${storeIco}`,
+      );
+    }
+  } catch (err) {
+    console.warn("forwardToBackend: failed to reach backend:", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Ingestion Pipeline
 // ---------------------------------------------------------------------------
 
@@ -365,6 +424,9 @@ async function runIngestion(env: Env): Promise<void> {
       const upserted = await insertPromotions(env.DB, target.ico, items);
       totalUpserted += upserted;
       console.log(`[${target.name}] Upserted ${upserted} promotions`);
+
+      // Forward to backend API (best-effort, don't fail the pipeline)
+      await forwardToBackend(env, target.ico, items);
     } catch (err) {
       console.error(`[${target.name}] Unexpected error during ingestion:`, err);
     }
