@@ -68,7 +68,7 @@ const SYSTEM_PROMPT = `You are a data extraction assistant. Extract all grocery 
 Each element must have exactly these fields:
 - "product_name": string (normalized, lowercase, no diacritics)
 - "sale_price": number
-- "original_price": number | null
+- "original_price": a number, or null if the original non-discounted price is not shown or cannot be determined
 - "category": string (e.g., "dairy", "meat", "bakery", "pantry")`;
 
 /**
