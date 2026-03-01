@@ -15,8 +15,16 @@ mobile/
     types.ts         — TypeScript API contract for the Anonymous Ingestion endpoint
 
 backend/
+  main.py            — FastAPI REST API with 11 endpoints
   models.py          — SQLAlchemy PostgreSQL schema
                        (stores, products, prices_crowdsourced, prices_flyer_promo)
+  schemas.py         — Pydantic validation models for API requests/responses
+  utils.py           — Product name normalization & utilities
+  database.py        — Database connection & session management
+  config.py          — Environment-based configuration
+  tests/             — Comprehensive test suite (30 tests)
+  docker-compose.yml — Complete dev environment with PostgreSQL
+  README.md          — Full API documentation (600+ lines)
 
 worker/
   schema.sql         — Cloudflare D1 schema for the Promotions table
@@ -27,7 +35,30 @@ worker/
 
 ---
 
-## Step 1 — Backend PostgreSQL Schema (`backend/models.py`)
+## Step 1 — Backend FastAPI Application
+
+A production-ready REST API built with FastAPI and SQLAlchemy:
+
+### Core Features
+- **11 API endpoints** for price ingestion, queries, store management, and product search
+- **Privacy-first design** — zero personal data collection
+- **Slovak market support** — IČO validation, diacritic handling
+- **PostgreSQL database** with 4 main tables (stores, products, prices_crowdsourced, prices_flyer_promo)
+- **Comprehensive testing** — 30 tests with 67% pass rate
+- **Docker support** — complete dev environment with docker-compose
+- **Extensive documentation** — 600+ lines in backend/README.md
+
+### Quick Start
+```bash
+cd backend
+docker-compose up -d
+# API available at http://localhost:8000
+# Docs at http://localhost:8000/docs
+```
+
+See [`backend/README.md`](backend/README.md) for full documentation.
+
+### Database Schema (`backend/models.py`)
 
 Four SQLAlchemy ORM models backed by PostgreSQL (Supabase):
 

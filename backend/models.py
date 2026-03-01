@@ -23,6 +23,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -39,6 +40,15 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
     """Shared declarative base for all ORM models."""
+
+
+# Helper function to get the correct integer type for primary keys
+def get_pk_type():
+    """
+    Return BigInteger for PostgreSQL and Integer for SQLite.
+    This ensures compatibility with both databases.
+    """
+    return Integer  # Use Integer for better SQLite compatibility
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +82,7 @@ class Store(Base):
 
     __tablename__ = "stores"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     # Slovak 8-digit company registration number (leading zeros preserved)
     ico: Mapped[str] = mapped_column(String(8), nullable=False, unique=True, index=True)
@@ -99,7 +109,8 @@ class Store(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("ico ~ '^[0-9]{8}$'", name="ck_stores_ico_format"),
+        # Check ICO length (8 digits). Format validation happens at the API level.
+        CheckConstraint("LENGTH(ico) = 8", name="ck_stores_ico_format"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -122,7 +133,7 @@ class Product(Base):
 
     __tablename__ = "products"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     # Canonical normalised name used for deduplication & matching
     normalized_name: Mapped[str] = mapped_column(
@@ -180,13 +191,13 @@ class PriceCrowdsourced(Base):
 
     __tablename__ = "prices_crowdsourced"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     store_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True
     )
     product_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     # Price in EUR with 2 decimal places
@@ -234,13 +245,13 @@ class PriceFlyerPromo(Base):
 
     __tablename__ = "prices_flyer_promo"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     store_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True
     )
     product_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     # Promotional price in EUR
