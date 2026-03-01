@@ -25,7 +25,7 @@ from .schemas import (
     PriceQueryParams,
     PriceQueryResponse,
 )
-from .utils import normalize_product_name
+from .utils import normalize_product_name, lookup_chain_name
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -107,11 +107,10 @@ def ingest_prices(
             # 1. Get or create the store
             store = db.query(Store).filter(Store.ico == obs.ico).first()
             if not store:
-                # Create new store with minimal information
-                # The chain_name can be populated later from external data sources
+                # Create new store using the IČO→name lookup table
                 store = Store(
                     ico=obs.ico,
-                    chain_name=f"Store {obs.ico}",  # Placeholder name
+                    chain_name=lookup_chain_name(obs.ico),
                     flyer_enabled=False,
                 )
                 db.add(store)
@@ -138,7 +137,7 @@ def ingest_prices(
                 store_id=store.id,
                 product_id=product.id,
                 price_eur=obs.price,
-                observed_on=obs.observed_on,
+                observed_on=obs.date,
             )
             db.add(price_record)
 
@@ -199,10 +198,22 @@ def query_prices(
     """
     Query crowdsourced prices.
 
-    Returns price observations matching the given filters.
-    Useful for price comparison, trend analysis, and shopping list optimization.
+    Returns the **latest** price observation per (product, store) pair matching
+    the given filters.  This ensures shop-comparison screens show one current
+    price per store rather than the full historical series.
     """
-    # Build the query
+    # Subquery: latest observed_on per (store_id, product_id)
+    latest_subq = (
+        select(
+            PriceCrowdsourced.store_id,
+            PriceCrowdsourced.product_id,
+            func.max(PriceCrowdsourced.observed_on).label("max_date"),
+        )
+        .group_by(PriceCrowdsourced.store_id, PriceCrowdsourced.product_id)
+        .subquery()
+    )
+
+    # Main query: join to keep only the latest row per (store, product)
     query = (
         db.query(
             PriceCrowdsourced,
@@ -213,6 +224,12 @@ def query_prices(
         )
         .join(Product, PriceCrowdsourced.product_id == Product.id)
         .join(Store, PriceCrowdsourced.store_id == Store.id)
+        .join(
+            latest_subq,
+            (PriceCrowdsourced.store_id == latest_subq.c.store_id)
+            & (PriceCrowdsourced.product_id == latest_subq.c.product_id)
+            & (PriceCrowdsourced.observed_on == latest_subq.c.max_date),
+        )
     )
 
     # Apply filters

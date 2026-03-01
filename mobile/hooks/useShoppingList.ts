@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import * as SQLite from "expo-sqlite";
-import { initLocalDatabase } from "../db/schema";
+import { getLocalDatabase } from "../db/schema";
 
-/** Singleton database promise shared across all hooks. */
-let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
-
-function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (!dbPromise) {
-    dbPromise = initLocalDatabase();
-  }
-  return dbPromise;
+/** Returns the shared SQLite database, initialising it on first call. */
+function getDb() {
+  return getLocalDatabase();
 }
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ Tests for product name normalization utilities.
 
 import pytest
 
-from backend.utils import extract_quantity_hint, normalize_product_name
+from backend.utils import extract_quantity_hint, lookup_chain_name, normalize_product_name
 
 
 class TestNormalizeProductName:
@@ -91,3 +91,27 @@ class TestExtractQuantityHint:
         assert base == "Milk"
         assert qty == 1.5
         assert unit == "l"
+
+
+class TestLookupChainName:
+    """Tests for lookup_chain_name function."""
+
+    def test_known_ico_lidl(self):
+        """Test that Lidl IČO returns 'Lidl'."""
+        assert lookup_chain_name("35532773") == "Lidl"
+
+    def test_known_ico_tesco(self):
+        """Test that Tesco IČO returns 'Tesco'."""
+        assert lookup_chain_name("31322571") == "Tesco"
+
+    def test_known_ico_kaufland(self):
+        """Test that Kaufland IČO returns 'Kaufland'."""
+        assert lookup_chain_name("36488526") == "Kaufland"
+
+    def test_unknown_ico_fallback(self):
+        """Test that unknown IČO returns 'Store XXXXXXXX'."""
+        assert lookup_chain_name("99999999") == "Store 99999999"
+
+    def test_unknown_ico_different(self):
+        """Test fallback with another unknown IČO."""
+        assert lookup_chain_name("12345678") == "Store 12345678"

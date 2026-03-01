@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SQLite from "expo-sqlite";
-import { initLocalDatabase } from "../db/schema";
+import { getLocalDatabase } from "../db/schema";
 
 // ---------------------------------------------------------------------------
 // Database context — provides the open SQLiteDatabase to the component tree
@@ -24,7 +24,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     let cancelled = false;
-    initLocalDatabase()
+    getLocalDatabase()
       .then((database) => {
         if (!cancelled) setDb(database);
       })
@@ -35,6 +35,10 @@ export default function RootLayout() {
       cancelled = true;
     };
   }, []);
+
+  // Keep the root null until the DB is ready to prevent child screens from
+  // mounting before the schema has been applied (race condition on startup).
+  if (!db) return null;
 
   return (
     <DbContext.Provider value={db}>
