@@ -87,12 +87,12 @@ export async function extractPromotionsFromPdf(
   // Convert ArrayBuffer to base64
   const bytes = new Uint8Array(pdfBuffer);
   const CHUNK_SIZE = 8192;
-  let binary = "";
+  const binaryChunks: string[] = [];
   for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
     const chunk = bytes.subarray(i, i + CHUNK_SIZE);
-    binary += String.fromCharCode(...chunk);
+    binaryChunks.push(String.fromCharCode(...chunk));
   }
-  const base64 = btoa(binary);
+  const base64 = btoa(binaryChunks.join(""));
 
   const requestBody = {
     contents: [
