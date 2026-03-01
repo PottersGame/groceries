@@ -2,15 +2,18 @@
 #
 # CRON-triggered worker that fetches supermarket flyer PDFs, extracts sale
 # items via Gemini vision AI, and persists them to a D1 database.
+#
+# Secrets (set via `wrangler secret put <NAME>`):
+#   GEMINI_API_KEY — Google AI Studio API key for Gemini
 
 name = "pantrypal-sk-ingestion"
 main = "src/index.ts"
 compatibility_date = "2024-12-02"
 
 # ── CRON Trigger ──────────────────────────────────────────────────────────────
-# Runs every day at 04:00 UTC (05:00 CET) to pick up new weekly flyers.
+# Runs every Monday at 02:00 UTC to pick up new weekly flyers.
 [triggers]
-crons = ["0 4 * * *"]
+crons = ["0 2 * * 1"]
 
 # ── Cloudflare D1 Binding ─────────────────────────────────────────────────────
 [[d1_databases]]

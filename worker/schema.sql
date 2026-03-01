@@ -2,19 +2,34 @@
 --
 -- Promotions table for storing sale items extracted from supermarket flyer PDFs.
 -- Populated by a CRON-triggered Worker that uses Gemini vision AI.
+--
+-- MIGRATION NOTE: If upgrading from the previous schema (with columns store_ico,
+-- product_name_normalized, start_date, end_date), you must drop and recreate the
+-- table since the column layout has changed entirely:
+--
+--   DROP TABLE IF EXISTS promotions;
+--
+-- Then re-run this script. Only do this if you can discard existing data.
+-- For production environments with data to preserve, create a new table, migrate
+-- rows with transformed column values, then swap:
+--
+--   CREATE TABLE promotions_new (...);
+--   INSERT INTO promotions_new (store, product_name, sale_price, category)
+--     SELECT store_ico, product_name_normalized, sale_price, 'uncategorized'
+--     FROM promotions;
+--   DROP TABLE promotions;
+--   ALTER TABLE promotions_new RENAME TO promotions;
 
-CREATE TABLE IF NOT EXISTS promotions (
-    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-    store_ico                TEXT    NOT NULL,                       -- 8-digit Slovak IČO
-    product_name_normalized  TEXT    NOT NULL,                       -- lower-case, diacritic-stripped
-    sale_price               REAL    NOT NULL,                       -- promotional price in EUR
-    start_date               TEXT    NOT NULL,                       -- ISO-8601 date (YYYY-MM-DD)
-    end_date                 TEXT    NOT NULL,                       -- ISO-8601 date (YYYY-MM-DD)
+DROP TABLE IF EXISTS promotions;
 
-    CONSTRAINT ck_promotions_ico        CHECK (length(store_ico) = 8),
-    CONSTRAINT ck_promotions_price      CHECK (sale_price > 0),
-    CONSTRAINT ck_promotions_date_range CHECK (end_date >= start_date)
+CREATE TABLE promotions (
+    id          INTEGER   PRIMARY KEY,
+    store       TEXT      NOT NULL,
+    product_name TEXT     NOT NULL,
+    sale_price  REAL      NOT NULL,
+    category    TEXT      NOT NULL,
+    scraped_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_promotions_store_ico ON promotions (store_ico);
-CREATE INDEX IF NOT EXISTS idx_promotions_dates     ON promotions (start_date, end_date);
+CREATE INDEX IF NOT EXISTS idx_promotions_store ON promotions (store);
+CREATE INDEX IF NOT EXISTS idx_promotions_category ON promotions (category);

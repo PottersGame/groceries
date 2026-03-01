@@ -3,9 +3,8 @@
  *
  * CRON-triggered worker that:
  *   1. Fetches supermarket flyer PDFs
- *   2. Converts pages to image buffers
- *   3. Calls the Gemini vision API to extract structured JSON sale data
- *   4. Persists the results to a Cloudflare D1 database
+ *   2. Sends the PDF to the Gemini API for structured data extraction
+ *   3. Persists the extracted sale items to a Cloudflare D1 database
  */
 
 // ---------------------------------------------------------------------------
@@ -19,16 +18,16 @@ export interface Env {
   GEMINI_API_KEY: string;
   /** Comma-separated list of flyer PDF URLs to process */
   FLYER_PDF_URLS?: string;
-  /** 8-digit Slovak IČO of the store whose flyers are being processed */
-  STORE_ICO?: string;
+  /** Name of the store whose flyers are being processed */
+  STORE_NAME?: string;
 }
 
-/** A single sale item extracted from a flyer page by the Gemini vision model. */
+/** A single sale item extracted from a flyer by the Gemini model. */
 export interface SaleItem {
   product_name: string;
   sale_price: number;
-  start_date: string;
-  end_date: string;
+  original_price: number | null;
+  category: string;
 }
 
 /** Shape of the Gemini API response content part. */
@@ -48,11 +47,11 @@ interface GeminiApiResponse {
 // Constants
 // ---------------------------------------------------------------------------
 
-const GEMINI_MODEL = "gemini-2.0-flash-lite";
+const GEMINI_MODEL = "gemini-2.5-flash";
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 // ---------------------------------------------------------------------------
-// Gemini Vision Extraction
+// Gemini PDF Extraction
 // ---------------------------------------------------------------------------
 
 /**
@@ -62,40 +61,39 @@ const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/
  *   - An array of sale item objects
  *   - Exact field names and types
  *   - Product name normalisation rules (lower-case, no diacritics)
- *   - ISO-8601 date formats
+ *   - Category classification
  */
-const SYSTEM_PROMPT = `You are a data extraction assistant for a Slovak grocery price tracker.
-Analyze the provided supermarket flyer image and extract every promotional sale item visible.
+const SYSTEM_PROMPT = `You are a data extraction assistant. Extract all grocery items on sale from this Slovak supermarket flyer. Return ONLY a valid JSON array. Do not use markdown blocks.
 
-Return ONLY a JSON array where each element has exactly these fields:
-- "product_name": string — the product name, normalized to lower-case with diacritics removed and extra whitespace collapsed (e.g. "zlaty bazant 0.5l")
-- "sale_price": number — the promotional price in EUR as a positive number (e.g. 1.49)
-- "start_date": string — the promotion start date in ISO-8601 format "YYYY-MM-DD"
-- "end_date": string — the promotion end date in ISO-8601 format "YYYY-MM-DD"
-
-Rules:
-1. If a date range is shown on the flyer (e.g. "1.3. - 7.3.2026"), use it for start_date and end_date.
-2. If only one date is visible, use it for both start_date and end_date.
-3. If no dates are visible, use "1970-01-01" for both fields.
-4. Always use the discounted/promotional price, not the original price.
-5. Normalize product names: remove diacritics (š→s, č→c, ž→z, etc.), convert to lower-case, collapse whitespace.
-6. Do not include non-food promotional items (electronics, clothing, etc.) unless they are clearly grocery items.
-7. Return an empty array [] if no sale items are found.`;
+Each element must have exactly these fields:
+- "product_name": string (normalized, lowercase, no diacritics)
+- "sale_price": number
+- "original_price": a number, or null if the original non-discounted price is not shown or cannot be determined
+- "category": string (e.g., "dairy", "meat", "bakery", "pantry")`;
 
 /**
- * Calls the Gemini vision API to extract structured sale data from a
- * base64-encoded flyer page image.
+ * Sends a PDF buffer to the Gemini API and extracts structured sale data.
  *
- * @param imageBase64 - Base64-encoded image (PNG or JPEG) of a single flyer page.
- * @param apiKey      - Google AI Studio API key.
- * @param mimeType    - MIME type of the image (default: "image/png").
+ * @param pdfBuffer - Raw PDF bytes as an ArrayBuffer.
+ * @param env       - Worker environment bindings (provides GEMINI_API_KEY).
  * @returns Parsed array of {@link SaleItem} objects.
  */
-export async function extractSalesWithGemini(
-  imageBase64: string,
-  apiKey: string,
-  mimeType = "image/png",
+export async function extractPromotionsFromPdf(
+  pdfBuffer: ArrayBuffer,
+  env: Env,
 ): Promise<SaleItem[]> {
+  const apiKey = env.GEMINI_API_KEY;
+
+  // Convert ArrayBuffer to base64
+  const bytes = new Uint8Array(pdfBuffer);
+  const CHUNK_SIZE = 8192;
+  const binaryChunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, i + CHUNK_SIZE);
+    binaryChunks.push(String.fromCharCode(...chunk));
+  }
+  const base64 = btoa(binaryChunks.join(""));
+
   const requestBody = {
     contents: [
       {
@@ -103,15 +101,15 @@ export async function extractSalesWithGemini(
           { text: SYSTEM_PROMPT },
           {
             inlineData: {
-              mimeType,
-              data: imageBase64,
+              mimeType: "application/pdf",
+              data: base64,
             },
           },
         ],
       },
     ],
     generationConfig: {
-      response_mime_type: "application/json",
+      responseMimeType: "application/json",
       temperature: 0.1,
     },
   };
@@ -144,10 +142,9 @@ export async function extractSalesWithGemini(
       item.product_name.length > 0 &&
       typeof item.sale_price === "number" &&
       item.sale_price > 0 &&
-      typeof item.start_date === "string" &&
-      /^\d{4}-\d{2}-\d{2}$/.test(item.start_date) &&
-      typeof item.end_date === "string" &&
-      /^\d{4}-\d{2}-\d{2}$/.test(item.end_date);
+      (item.original_price === null || typeof item.original_price === "number") &&
+      typeof item.category === "string" &&
+      item.category.length > 0;
 
     if (!valid) {
       console.warn("Skipping invalid sale item:", JSON.stringify(item));
@@ -165,30 +162,29 @@ export async function extractSalesWithGemini(
  *
  * Uses D1's `batch()` API to execute all inserts in a single round-trip.
  *
- * @param db       - Cloudflare D1 database binding.
- * @param storeIco - 8-digit Slovak IČO of the store.
- * @param items    - Array of validated sale items from Gemini.
+ * @param db    - Cloudflare D1 database binding.
+ * @param store - Name of the store.
+ * @param items - Array of validated sale items from Gemini.
  * @returns Number of rows inserted.
  */
 export async function insertPromotions(
   db: D1Database,
-  storeIco: string,
+  store: string,
   items: SaleItem[],
 ): Promise<number> {
   if (items.length === 0) return 0;
 
   const stmt = db.prepare(
-    `INSERT INTO promotions (store_ico, product_name_normalized, sale_price, start_date, end_date)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO promotions (store, product_name, sale_price, category)
+     VALUES (?, ?, ?, ?)`,
   );
 
   const batch = items.map((item) =>
     stmt.bind(
-      storeIco,
+      store,
       item.product_name,
       item.sale_price,
-      item.start_date,
-      item.end_date,
+      item.category,
     ),
   );
 
@@ -197,40 +193,23 @@ export async function insertPromotions(
 }
 
 // ---------------------------------------------------------------------------
-// PDF → Image Helper
+// PDF Fetching Utility
 // ---------------------------------------------------------------------------
 
 /**
- * Fetches a PDF from the given URL and returns its bytes as a base64 string.
- *
- * In a production pipeline this would render individual PDF pages to images
- * using a library such as pdf.js or a headless browser. For this initial
- * implementation the raw PDF bytes are sent to Gemini which can process
- * PDF content directly when provided as `application/pdf`.
+ * Downloads a supermarket flyer PDF from the given URL.
  *
  * @param url - URL of the flyer PDF.
- * @returns Object containing the base64-encoded content and its MIME type.
+ * @returns The raw PDF bytes as an ArrayBuffer.
  */
-export async function fetchPdfAsBase64(
+export async function fetchSupermarketPdf(
   url: string,
-): Promise<{ base64: string; mimeType: string }> {
+): Promise<ArrayBuffer> {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to fetch PDF from ${url}: ${response.status}`);
   }
-  const buffer = await response.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-
-  // Convert to base64 in chunks to avoid stack-overflow on large PDFs
-  const CHUNK_SIZE = 8192;
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-    const chunk = bytes.subarray(i, i + CHUNK_SIZE);
-    binary += String.fromCharCode(...chunk);
-  }
-  const base64 = btoa(binary);
-
-  return { base64, mimeType: "application/pdf" };
+  return response.arrayBuffer();
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +228,7 @@ async function runIngestion(env: Env): Promise<void> {
     return;
   }
 
-  const storeIco = env.STORE_ICO ?? "00000000";
+  const store = env.STORE_NAME ?? "unknown";
   const pdfUrls = (env.FLYER_PDF_URLS ?? "")
     .split(",")
     .map((u) => u.trim())
@@ -266,15 +245,15 @@ async function runIngestion(env: Env): Promise<void> {
     try {
       console.log(`Processing flyer: ${url}`);
 
-      // 1. Fetch PDF and convert to base64
-      const { base64, mimeType } = await fetchPdfAsBase64(url);
+      // 1. Fetch PDF
+      const pdfBuffer = await fetchSupermarketPdf(url);
 
-      // 2. Extract sale items via Gemini vision AI
-      const items = await extractSalesWithGemini(base64, apiKey, mimeType);
+      // 2. Extract sale items via Gemini AI
+      const items = await extractPromotionsFromPdf(pdfBuffer, env);
       console.log(`Extracted ${items.length} sale items from ${url}`);
 
       // 3. Persist to D1
-      const inserted = await insertPromotions(env.DB, storeIco, items);
+      const inserted = await insertPromotions(env.DB, store, items);
       totalInserted += inserted;
       console.log(`Inserted ${inserted} promotions from ${url}`);
     } catch (err) {
