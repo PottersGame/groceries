@@ -490,3 +490,236 @@ class TestLatestPricePerStore:
         assert response.status_code == 200
         data = response.json()
         assert data["store"]["chain_name"] == "Store 99999999"
+
+
+class TestPromotionsIngestion:
+    """Tests for promotions ingestion endpoint."""
+
+    def test_ingest_single_promo(self):
+        """Test ingesting a single promotional item."""
+        today = date.today()
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "mlieko rajo 1l",
+                    "salePrice": 0.89,
+                    "originalPrice": 1.19,
+                    "category": "dairy",
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+
+        response = client.post("/api/v1/promotions/ingest", json=payload)
+        assert response.status_code == 201
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["accepted"] == 1
+        assert data["rejected"] == 0
+
+    def test_ingest_multiple_promos(self):
+        """Test ingesting multiple promotional items."""
+        today = date.today()
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "mlieko 1l",
+                    "salePrice": 0.89,
+                    "category": "dairy",
+                    "validFrom": today.isoformat(),
+                },
+                {
+                    "ico": "35532773",
+                    "productName": "chlieb 500g",
+                    "salePrice": 0.99,
+                    "category": "bakery",
+                    "validFrom": today.isoformat(),
+                },
+            ]
+        }
+
+        response = client.post("/api/v1/promotions/ingest", json=payload)
+        assert response.status_code == 201
+        data = response.json()
+        assert data["accepted"] == 2
+        assert data["rejected"] == 0
+
+    def test_ingest_promo_idempotent(self):
+        """Test that re-ingesting the same promo updates rather than duplicates."""
+        today = date.today()
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "maslo 250g",
+                    "salePrice": 1.49,
+                    "category": "dairy",
+                    "validFrom": today.isoformat(),
+                }
+            ]
+        }
+
+        # Ingest twice
+        client.post("/api/v1/promotions/ingest", json=payload)
+        payload["items"][0]["salePrice"] = 1.29  # Updated price
+        response = client.post("/api/v1/promotions/ingest", json=payload)
+        assert response.status_code == 201
+        data = response.json()
+        assert data["accepted"] == 1
+
+    def test_ingest_promo_invalid_ico(self):
+        """Test that invalid IČO is rejected."""
+        payload = {
+            "items": [
+                {
+                    "ico": "123",
+                    "productName": "mlieko",
+                    "salePrice": 0.89,
+                    "validFrom": "2024-06-10",
+                }
+            ]
+        }
+
+        response = client.post("/api/v1/promotions/ingest", json=payload)
+        assert response.status_code == 422
+
+    def test_ingest_promo_empty_items(self):
+        """Test that empty items array is rejected."""
+        payload = {"items": []}
+        response = client.post("/api/v1/promotions/ingest", json=payload)
+        assert response.status_code == 422
+
+
+class TestPromotionsQuery:
+    """Tests for promotions query endpoint."""
+
+    def test_query_active_promotions(self):
+        """Test querying active promotions."""
+        today = date.today()
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "mlieko rajo 1l",
+                    "salePrice": 0.89,
+                    "category": "dairy",
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+        client.post("/api/v1/promotions/ingest", json=payload)
+
+        response = client.get("/api/v1/promotions")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["count"] >= 1
+
+    def test_query_promotions_by_product(self):
+        """Test querying promotions by product name."""
+        today = date.today()
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "mlieko 1l",
+                    "salePrice": 0.89,
+                    "category": "dairy",
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                },
+                {
+                    "ico": "35532773",
+                    "productName": "chlieb celozrnny",
+                    "salePrice": 1.29,
+                    "category": "bakery",
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                },
+            ]
+        }
+        client.post("/api/v1/promotions/ingest", json=payload)
+
+        response = client.get("/api/v1/promotions?product_name=mlieko")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] >= 1
+        assert all("mlieko" in r["product_name"].lower() for r in data["results"])
+
+    def test_query_promotions_by_ico(self):
+        """Test querying promotions filtered by store IČO."""
+        today = date.today()
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "jogurt biely",
+                    "salePrice": 0.49,
+                    "category": "dairy",
+                    "validFrom": today.isoformat(),
+                    "validTo": (today + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+        client.post("/api/v1/promotions/ingest", json=payload)
+
+        response = client.get("/api/v1/promotions?ico=35532773")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] >= 1
+        assert all(r["store_ico"] == "35532773" for r in data["results"])
+
+    def test_query_expired_promotions_excluded(self):
+        """Test that expired promotions are excluded by default."""
+        past = date.today() - timedelta(days=30)
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "stary produkt",
+                    "salePrice": 0.49,
+                    "category": "pantry",
+                    "validFrom": past.isoformat(),
+                    "validTo": (past + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+        client.post("/api/v1/promotions/ingest", json=payload)
+
+        response = client.get("/api/v1/promotions")
+        assert response.status_code == 200
+        data = response.json()
+        # Expired promos should not appear when active_only=true (default)
+        expired_results = [
+            r for r in data["results"] if "stary produkt" in r["product_name"]
+        ]
+        assert len(expired_results) == 0
+
+    def test_query_all_promotions_including_expired(self):
+        """Test querying all promotions including expired ones."""
+        past = date.today() - timedelta(days=30)
+        payload = {
+            "items": [
+                {
+                    "ico": "35532773",
+                    "productName": "historicky produkt",
+                    "salePrice": 0.99,
+                    "category": "pantry",
+                    "validFrom": past.isoformat(),
+                    "validTo": (past + timedelta(days=7)).isoformat(),
+                }
+            ]
+        }
+        client.post("/api/v1/promotions/ingest", json=payload)
+
+        response = client.get("/api/v1/promotions?active_only=false")
+        assert response.status_code == 200
+        data = response.json()
+        expired_results = [
+            r for r in data["results"] if "historicky produkt" in r["product_name"]
+        ]
+        assert len(expired_results) >= 1
