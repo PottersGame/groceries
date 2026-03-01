@@ -127,9 +127,8 @@ export function useShopFinder(): UseShopFinderResult {
             storePrices.reduce((sum, p) => sum + p.price_eur, 0) /
             storePrices.length;
 
-          // Distance placeholder — in production, store.branch_label could
-          // contain coordinates or we could geocode. For now, we use a random
-          // factor if no real location is available.
+          // In production, store locations would come from a geocoding
+          // service or coordinates stored in the store record.
           const distanceKm: number | null = null;
 
           // Score: lower is better. Price is the primary factor.
@@ -161,7 +160,7 @@ export function useShopFinder(): UseShopFinderResult {
         }
       }
     },
-    [location]
+    []
   );
 
   return { recommendations, isLoading, error, search, location };

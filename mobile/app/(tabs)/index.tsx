@@ -91,8 +91,10 @@ export default function ScannerTab(): React.JSX.Element {
       try {
         const nextReceipt = await fetchEKasaReceipt(uid);
         setReceipt(nextReceipt);
-        void ingest(nextReceipt);
-        void addReceiptToPantry(nextReceipt);
+        await Promise.all([
+          ingest(nextReceipt),
+          addReceiptToPantry(nextReceipt),
+        ]);
       } catch (scanError) {
         console.warn(`Failed to fetch receipt for UID: ${uid}`, scanError);
         setError("Nepodarilo sa načítať eKasa doklad.");
