@@ -8,7 +8,7 @@ These mirror the TypeScript types defined in mobile/api/types.ts.
 from datetime import date
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -22,6 +22,8 @@ class PriceObservation(BaseModel):
 
     Corresponds to the TypeScript `PriceObservation` interface.
     """
+
+    model_config = ConfigDict(populate_by_name=True)
 
     ico: str = Field(
         ...,
@@ -42,8 +44,11 @@ class PriceObservation(BaseModel):
         description="Price paid in EUR (must be positive)",
         examples=[0.89],
     )
-    date: date = Field(
+    # Field renamed to `observed_on` to avoid clashing with the `date` type;
+    # the JSON key remains "date" via the alias.
+    observed_on: date = Field(
         ...,
+        alias="date",
         description="ISO-8601 purchase date (YYYY-MM-DD)",
         examples=["2024-06-10"],
     )
