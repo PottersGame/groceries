@@ -159,7 +159,7 @@ export async function fetchEKasaReceipt(
       raw: json,
     };
   } catch (error) {
-    console.warn("fetchEKasaReceipt fallback to mock", error);
+    console.warn("fetchEKasaReceipt: API request failed, using mock data", error);
     return {
       uid: normalizedUid,
       ...MOCK_RECEIPT,
