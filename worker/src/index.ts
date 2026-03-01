@@ -93,16 +93,25 @@ export async function fetchWithRetry(
       return response;
     }
 
-    lastResponse = response;
-    console.warn(
-      `fetchWithRetry: attempt ${attempt + 1}/${retries} failed for ${url} (${response.status})`,
-    );
-
     if (attempt < retries - 1) {
+      // We won't use this response further; cancel its body to free resources
+      response.body?.cancel().catch?.(() => {});
+
+      // Also cancel any previously stored failed response body
+      lastResponse?.body?.cancel().catch?.(() => {});
+
+      lastResponse = response;
+      console.warn(
+        `fetchWithRetry: attempt ${attempt + 1}/${retries} failed for ${url} (${response.status})`,
+      );
+
       // Exponential backoff: 1 s, 2 s, 4 s, …
       await new Promise<void>((resolve) =>
         setTimeout(resolve, Math.pow(2, attempt) * 1000),
       );
+    } else {
+      // Last attempt failed; return this response after the loop
+      lastResponse = response;
     }
   }
 
