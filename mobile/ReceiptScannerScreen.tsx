@@ -75,7 +75,8 @@ export default function ReceiptScannerScreen(): React.JSX.Element {
     try {
       const nextReceipt = await fetchEKasaReceipt(uid);
       setReceipt(nextReceipt);
-    } catch {
+    } catch (scanError) {
+      console.warn("Receipt scan fetch failed", scanError);
       setError("Nepodarilo sa načítať eKasa doklad.");
     } finally {
       setIsLoading(false);
