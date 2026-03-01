@@ -1,3 +1,15 @@
+/**
+ * eKasa receipt fetching and QR-code UID extraction.
+ *
+ * LEGAL NOTICE — eKasa API Terms of Use:
+ *   This module accesses the Slovak Financial Administration's public eKasa API
+ *   (ekasa.financnasprava.sk). Users must only scan QR codes from receipts they
+ *   are entitled to access and must comply with the Slovak Financial
+ *   Administration's current terms of use for the eKasa system.
+ *   PantryPal SK is not affiliated with or endorsed by the Slovak Financial
+ *   Administration (Finančná správa SR). See TERMS_OF_SERVICE.md §4 for details.
+ */
+
 export interface EKasaReceiptItem {
   name: string;
   price: number;
